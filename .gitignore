@@ -1,0 +1,23 @@
+# 项目基础忽略
+__pycache__/
+*.pyc
+*.log
+.pytest_cache/
+venv/
+.venv/
+
+# 敏感文件
+.env
+.env.*
+*.key
+*.pem
+credentials*
+secrets*
+id_rsa
+id_ed25519
+
+# 运行数据
+data/
+logs/
+config/settings.json
+!config/.gitkeep
