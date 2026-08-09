@@ -12,16 +12,25 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.config import Settings, validate_settings  # noqa: E402
-from llm.secret_store import default_secret_store  # noqa: E402
+from core.config import ConfigError, Settings, validate_settings  # noqa: E402
+from llm.secret_store import SecretStoreError, default_secret_store  # noqa: E402
 
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
 
 
 def cmd_config_validate(args: argparse.Namespace) -> int:
-    s = Settings.load(args.config_path)
+    try:
+        s = Settings.load(args.config_path)
+    except ConfigError as e:
+        print(e)
+        return 1
     store = default_secret_store()
-    issues = validate_settings(s, store)
+    try:
+        issues = validate_settings(s, store)
+    except SecretStoreError as e:
+        print(f"配置: {args.config_path}")
+        print(f"  [ERROR] SecretStore 不可用: {e}")
+        return 1
     print(f"配置: {args.config_path}")
     if not issues:
         print("✓ 配置有效(本地校验通过, 未联网)")
@@ -34,7 +43,11 @@ def cmd_config_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_config_show(args: argparse.Namespace) -> int:
-    s = Settings.load(args.config_path)
+    try:
+        s = Settings.load(args.config_path)
+    except ConfigError as e:
+        print(e)
+        return 1
     print("default_model:")
     print(f"  provider: {s.default_model.provider}")
     print(f"  base_url: {s.default_model.base_url}")
@@ -49,35 +62,45 @@ def cmd_config_show(args: argparse.Namespace) -> int:
 
 
 def cmd_config_set(args: argparse.Namespace) -> int:
-    s = Settings.load(args.config_path)
     try:
+        s = Settings.load(args.config_path)
         s.set_value(args.key, args.value)
         print(f"已设置 {args.key} = {args.value}")
-    except (KeyError, TypeError, ValueError) as e:
-        print(f"设置失败: {e}")
+        return 0
+    except ConfigError as e:
+        print(e)
         return 1
-    return 0
 
 
 def cmd_config_set_key(args: argparse.Namespace) -> int:
-    """交互式输入 Key(不回显), 存入 SecretStore。"""
+    """交互式输入 Key(不回显), 存入 SecretStore。
+
+    优先 getpass(不回显); 若 getpass 不可用/失败(如管道输入), 回退 input。
+    """
+    store = default_secret_store()
+    value: str | None = None
+    # 尝试 getpass(不回显); stdin 非 TTY 时 getpass 可能阻塞 → 用 select 探测
     try:
         import getpass
-    except Exception:
-        getpass = None
-    store = default_secret_store()
-    try:
-        if getpass:
+        import sys as _sys
+        if _sys.stdin.isatty():
             value = getpass.getpass(f"API Key for '{args.reference}': ")
-        else:
+    except (EOFError, KeyboardInterrupt, OSError):
+        value = None
+    if value is None:
+        try:
             value = input(f"API Key for '{args.reference}': ")
-    except (EOFError, KeyboardInterrupt):
-        print("\n已取消")
-        return 1
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return 1
     if not value.strip():
         print("未输入内容, 取消")
         return 1
-    store.set(args.reference, value.strip())
+    try:
+        store.set(args.reference, value.strip())
+    except SecretStoreError as e:
+        print(f"设置密钥失败: {e}")
+        return 1
     print(f"✓ 已存入 SecretStore(reference={args.reference}); 未写入任何文件/日志")
     return 0
 

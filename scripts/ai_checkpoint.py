@@ -159,6 +159,20 @@ def security_scan(force_files=None):
     ]
 
     findings = []
+
+    # 路径级敏感文件黑名单: 按文件名/路径判断, 与内容无关
+    PATH_BLOCK_RE = re.compile(
+        r"(?i)(^|[/\\])(\.env(\..*)?|.*\.key|.*\.pem|.*\.p12|.*\.pfx|"
+        r"credentials?|secrets?|.*\.secret|id_rsa|id_ed25519|auth\.json)(\.|$)"
+    )
+    # 高风险二进制扩展名: 无法扫描内容 → 默认阻止 push(除非显式加入安全白名单)
+    HIGH_RISK_BINARY_EXTS = {
+        ".exe", ".dll", ".so", ".dylib", ".7z", ".zip", ".rar", ".apk", ".aab",
+        ".jar", ".war", ".class", ".bin", ".dat", ".pak", ".node", ".wasm", ".pyc",
+    }
+    # 允许入库的二进制扩展名(低风险, 如图片/字体) — 作为安全白名单
+    ALLOWED_BINARY_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".ttf", ".otf", ".woff", ".woff2", ".svg"}
+
     for path in files:
         full = os.path.join(ROOT, path)
         if not os.path.isfile(full):
@@ -168,30 +182,67 @@ def security_scan(force_files=None):
             continue
         if os.path.basename(full) == ".gitignore":
             continue
-        # 跳过二进制/大文件(不扫描内容, 但按扩展名拦截)
-        size = os.path.getsize(full)
-        if size > 2_000_000:  # >2MB 不扫描内容
-            ext = os.path.splitext(path)[1].lower()
-            if ext in (".exe", ".dll", ".7z", ".apk", ".png", ".jpg", ".ttf", ".pak", ".dat", ".bin"):
-                continue
-        try:
-            with open(full, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(512_000)  # 只扫前 512KB
-        except Exception:
+
+        rel = path.replace("\\", "/")
+        base = os.path.basename(full)
+
+        # ── 路径级拦截(与内容无关) ──
+        if PATH_BLOCK_RE.search(rel) or PATH_BLOCK_RE.search(base):
+            findings.append({
+                "file": path, "line": 0, "pattern": "敏感文件路径(.env/.key/.pem/credentials/secrets…)",
+                "masked": "(按路径拦截)",
+            })
             continue
 
-        for pat, desc in patterns:
-            m = re.search(pat, content)
-            if m:
-                line_no = content[: m.start()].count("\n") + 1
-                # 脱敏: 只显示前4字符
-                secret = m.group(0)
-                masked = secret[:4] + "…" if len(secret) > 8 else secret
+        ext = os.path.splitext(base)[1].lower()
+        size = os.path.getsize(full)
+
+        # ── 高风险二进制: 不扫描内容 → 默认阻止 push ──
+        if ext in HIGH_RISK_BINARY_EXTS:
+            findings.append({
+                "file": path, "line": 0,
+                "pattern": f"高风险二进制({ext}), 内容不可扫描",
+                "masked": "(按扩展名拦截)",
+            })
+            continue
+        # 其他非文本/超大文件: 白名单图片字体等放行; 其余超 2MB 阻止
+        if ext and ext not in ALLOWED_BINARY_EXTS and size > 2_000_000:
+            findings.append({
+                "file": path, "line": 0,
+                "pattern": f"大文件({size // 1024}KB, {ext}), 无法完整扫描内容",
+                "masked": "(按大小拦截)",
+            })
+            continue
+
+        # ── 文本内容扫描(分块, 全文件覆盖, 不只看前 512KB) ──
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as f:
+                # 分块读取(64KB/块), 逐块匹配, 记录匹配行号
+                for chunk_start in range(0, size, 64 * 1024):
+                    f.seek(chunk_start)
+                    content = f.read(64 * 1024)
+                    if not content:
+                        break
+                    for pat, desc in patterns:
+                        m = re.search(pat, content)
+                        if m:
+                            line_no = content[: m.start()].count("\n") + 1
+                            if chunk_start > 0:
+                                # 近似行号(分块边界), 标注"约"
+                                line_no = f"约{line_no}"
+                            secret = m.group(0)
+                            masked = secret[:4] + "…" if len(secret) > 8 else secret
+                            findings.append({
+                                "file": path, "line": line_no, "pattern": desc, "masked": masked,
+                            })
+                            break  # 每文件每块最多记一条, 避免刷屏
+        except (UnicodeDecodeError, OSError):
+            # 无法按文本读取: 非白名单二进制且非高风险扩展 → 保守拦截
+            if ext not in ALLOWED_BINARY_EXTS:
                 findings.append({
-                    "file": path,
-                    "line": line_no,
-                    "pattern": desc,
-                    "masked": masked,
+                    "file": path, "line": 0,
+                    "pattern": "无法按文本读取, 无法确认内容安全",
+                    "masked": "(按内容不可读拦截)",
                 })
 
     return len(findings) > 0, findings

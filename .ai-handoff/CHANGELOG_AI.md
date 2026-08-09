@@ -18,3 +18,16 @@
 - `?? tests/`
 - `?? tools/`
 
+
+## 2026-08-09 17:06 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/PROJECT_STATE.md`
+- ` M adapters/cli/main.py`
+- ` M core/config.py`
+- ` M llm/secret_store.py`
+- ` M pyproject.toml`
+- ` M scripts/ai_checkpoint.py`
+- ` M tests/test_m0.py`
+
