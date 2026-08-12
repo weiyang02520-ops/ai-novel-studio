@@ -28,16 +28,19 @@ def test_update_creates_snapshot(proj):
     assert len(records) == 1
     rec = records[0]
     assert rec["operation"] == "chapter.update"
-    assert rec["target"] == "drafts/ch0001.draft.md"
-    assert rec["previous"] == "present"
-    assert rec["backup"]  # 快照文件存在
+    # changes 列表(单文件)
+    assert len(rec["changes"]) == 1
+    ch = rec["changes"][0]
+    assert ch["target"] == "drafts/ch0001.draft.md"
+    assert ch["previous"] == "present"
+    assert ch["backup"]  # 快照文件存在
 
 
 def test_snapshot_contains_previous_content(proj):
     write_draft(proj, 1, "t", "OLD CONTENT")
     update_draft(proj, 1, content="NEW CONTENT")
     rec = list_history(proj)[0]
-    backup = proj.store.safe_path(proj.id, rec["backup"])
+    backup = proj.store.safe_path(proj.id, rec["changes"][0]["backup"])
     assert "OLD CONTENT" in backup.read_text(encoding="utf-8")
 
 
@@ -75,20 +78,56 @@ def test_history_isolated_between_projects(tmp_path):
 
 
 def test_confirm_project_json_snapshot(proj):
+    """confirm 快照: changes 列表含 project.json + draft + confirmed(absent)。"""
     write_draft(proj, 1, "t", "c")
     confirm_draft(proj, 1)
-    # confirm 对 project.json 的修改应留下快照
     records = list_history(proj)
-    assert any(r["operation"] == "chapter.confirm" and r["target"] == "project.json" for r in records)
+    confirm_rec = next(r for r in records if r["operation"] == "chapter.confirm")
+    targets = [ch["target"] for ch in confirm_rec["changes"]]
+    assert "project.json" in targets
+    assert "drafts/ch0001.draft.md" in targets
+    assert "chapters/ch0001.md" in targets
 
 
-def test_undo_confirm_project_json(proj):
-    """undo confirm 的 project.json 快照 → current_chapter 回退。"""
+# ── 完整 confirm undo(§10) ───────────────────────────────
+
+def test_confirm_undo_restores_full_state(proj):
+    """undo confirm → current_chapter 恢复 + draft 恢复(内容一致) + confirmed 删除 + validate PASS。"""
+    from core.project import validate_project
+    write_draft(proj, 1, "第一章", "V2 FINAL CONTENT")
+    confirm_draft(proj, 1)
+    assert proj.current_chapter == 1
+    assert not (proj.store.safe_path(proj.id, "drafts/ch0001.draft.md")).exists()
+
+    undo_last(proj)
+    # current_chapter 恢复
+    assert proj.current_chapter == 0
+    # draft 恢复, 内容一致
+    c = read_draft(proj, 1)
+    assert c.body == "V2 FINAL CONTENT"
+    assert c.status == "draft"
+    # confirmed 删除
+    assert not (proj.store.safe_path(proj.id, "chapters/ch0001.md")).exists()
+    # 完整验证
+    assert validate_project(proj.store, proj.id) == []
+
+
+def test_confirm_undo_disk_state_after_reopen(proj):
+    """undo confirm 后重开项目, 磁盘状态完全回到 confirm 前。"""
+    from core.project import open_project, validate_project
+    write_draft(proj, 1, "t", "CONTENT X")
+    confirm_draft(proj, 1)
+    undo_last(proj)
+    p2 = open_project(proj.store, proj.id)
+    assert p2.current_chapter == 0
+    assert read_draft(p2, 1).body == "CONTENT X"
+    assert validate_project(proj.store, proj.id) == []
+
+
+def test_undo_confirm_syncs_metadata_object(proj):
+    """undo 恢复 project.json 后, Project 内存 metadata 同步(不要求重开进程)。"""
     write_draft(proj, 1, "t", "c")
     confirm_draft(proj, 1)
     assert proj.current_chapter == 1
-    undo_last(proj)  # 回滚 project.json
-    # 重新打开验证 current_chapter 恢复
-    from core.project import open_project
-    p2 = open_project(proj.store, proj.id)
-    assert p2.current_chapter == 0, "undo confirm 后 current_chapter 应回退"
+    undo_last(proj)
+    assert proj.current_chapter == 0, "内存 metadata 必须同步恢复"

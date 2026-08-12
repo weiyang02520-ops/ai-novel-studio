@@ -1,24 +1,24 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 13:29 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-12 13:59 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M1 implementation complete. Awaiting External ChatGPT M1 review.**
+**M1 FINAL STABILIZATION complete. Awaiting External ChatGPT final review.**
 (M1 Gate 未授权; M2 NOT AUTHORIZED。)
 
 ## 本轮变更
 
-**add 12 new files**(新增 12 / 修改 1 / 删除 0)
+**update 1 files**(新增 1 / 修改 1 / 删除 0)
 
 ## 已验证内容
 
-- 单元测试 **128/128 PASS**(M0 66 + M1 62)。
-- Acceptance A-I 真实 CLI 验收全部 PASS(临时数据目录, 已清理)。
-- M0 回归: Config/SecretStore/checkpoint 安全/set-key 全部保持通过。
-- 章节数据闭环: 写入→重开→读回 UTF-8 完全一致; current_chapter 只随 confirm 推进; 旧章节 confirm 不倒退; confirmed 保护; 多小说隔离; 损坏检测无 traceback。
+- 单元测试 **162/162 PASS**(含 32 个稳定化测试: 故障注入 A/B/C/D / 崩溃残留 / metadata 损坏 9 例 / history 损坏 / roundtrip / guards)。
+- Acceptance J(confirm undo): confirm→undo→重启进程→draft=v2/confirmed 无/current_chapter=0/validate PASS。
+- Acceptance K(失败 rollback): 4 类故障注入(写 confirmed/写 project.json/删 draft/history 快照失败)→ 磁盘恢复 confirm 前状态(单元测试断言)。
+- Acceptance L(跨文件): duplicate 检测 + list CONFLICT 显示 / metadata str 损坏报错 exit=1 无 traceback / current_chapter 不一致检测 — 全部 CLI 真实验证。
+- M1 正常路径回归(create→write→reopen→update→undo→confirm→reopen)保持 PASS。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
-- Core/Adapter 边界: 新增 core 文件无 argparse/终端 IO。
 
 ## 未验证内容
 
@@ -32,5 +32,5 @@
 
 ## 下一步
 
-- P0: 等待 External ChatGPT M1 review。
+- P0: 等待 External ChatGPT M1 final review。
 - P1: M2(Provider + config test-provider)仅在明确授权后开始。

@@ -78,3 +78,17 @@
 - `?? tests/test_project.py`
 - `?? tests/test_storage.py`
 
+
+## 2026-08-12 13:59 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/PROJECT_STATE.md`
+- ` M adapters/cli/commands.py`
+- ` M core/chapter.py`
+- ` M core/history.py`
+- ` M core/project.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M tests/test_history.py`
+- `?? tests/test_stabilization.py`
+

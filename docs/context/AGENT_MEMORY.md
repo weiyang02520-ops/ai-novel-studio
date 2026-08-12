@@ -58,3 +58,12 @@ ai-novel-studio/
 ## Milestone Gate
 - 里程碑 PASS 由 External ChatGPT 宣布, Agent 不自行宣布
 - M1 已完成待审; M2 未授权
+
+## 数据一致性规则(稳定, M1 Stabilization)
+- confirm 是文件事务: draft+confirmed+project.json+history 四文件; 任何失败 → 完整 rollback; draft 删除失败 = confirm 失败(不留下双份)
+- history undo 不允许 partial rollback: confirm 记录含 changes 列表, undo 成组恢复(project.json/draft/confirmed); 恢复后同步 Project.metadata
+- validate 必须跨文件检查: duplicate(draft+confirmed 同编号)/ current_chapter==max(confirmed)/ 文件名-frontmatter 一致性
+- metadata 严格类型: current_chapter int>=0 / current_volume int>=1 / auto_accept bool / defaults object — 非法值 DataIntegrityError, 不隐式转换
+- history index 非空坏行 → DataIntegrityError(不 silent skip); _next_seq 拒绝损坏 index
+- frontmatter: characters 用 JSON 表示(list[str] 严格); 标量值含 CR/LF 拒绝(Core 写出的必须能读回)
+- update guards: reviewing/ready 拒绝; origin=ai 拒绝(manual 入口不绕过 AI 边界); user_confirmed 更新后回 draft

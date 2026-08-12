@@ -142,7 +142,8 @@ def cmd_chapter_list(args: argparse.Namespace) -> int:
     print(f"{'章节':8s} {'标题':20s} {'状态':14s} {'字数':>6s}  更新时间")
     for c in chapters:
         loc = "草稿" if c["location"] == "draft" else "已确认"
-        print(f"{c['chapter']:>6d} {c['title'][:18]:20s} {c['status']:14s} {c['words']:>6d}  {c['updated_at']}  [{loc}]")
+        flag = "  [冲突!]" if c.get("conflict") else ""
+        print(f"{c['chapter']:>6d} {c['title'][:18]:20s} {c['status']:14s} {c['words']:>6d}  {c['updated_at']}  [{loc}]{flag}")
     return 0
 
 
@@ -205,7 +206,8 @@ def cmd_history_undo_last(args: argparse.Namespace) -> int:
         rec = history_core.undo_last(p)
     except (StorageError, DataIntegrityError) as e:
         return _print_error(e)
-    print(f"✓ 已回滚 [{rec.get('operation')}] target={rec.get('target')}(seq={rec.get('seq')})")
+    targets = [ch.get("target", "?") for ch in rec.get("changes", [])]
+    print(f"✓ 已回滚 [{rec.get('operation')}] targets={targets}(seq={rec.get('seq')})")
     return 0
 
 

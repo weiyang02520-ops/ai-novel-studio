@@ -10,47 +10,40 @@
 
 ## 2. 当前阶段
 
-**M1 implementation complete. Awaiting External ChatGPT M1 review.**
+**M1 FINAL STABILIZATION complete. Awaiting External ChatGPT final review.**
 (M1 Gate 未授权; M2 NOT AUTHORIZED。)
 
 ## 3. 本轮完成内容
 
-- **M1 COMPLETE BATCH(小说项目 + 章节本地持久化)**:
-  - Core 新增 4 文件: storage.py(原子写/路径安全/ProjectStore)/ project.py(项目 CRUD/目录骨架/ID 安全)/ chapter.py(frontmatter/章节状态机/confirm)/ history.py(snapshot/undo-last)
-  - CLI 新增 novel/chapter/history 子命令(commands.py)
-  - 章节: DRAFT → USER_CONFIRMED → CONFIRMED(手动路径); confirm 后 current_chapter=max 推进; confirmed 正文受保护
-  - .history 快照: update 与 confirm 的 project.json 修改自动快照; undo-last 恢复
-  - 自研有限 frontmatter(不引入 YAML 依赖); UTF-8 全流程; 原子写(same-dir temp + os.replace)
-  - 数据闭环验收 A-I 全部 PASS(创建→草稿→重开→更新→undo→confirm→最终重开→隔离→损坏检测)
-  - 新增测试 62 个(test_project 21 / test_chapter 22 / test_storage 7 / test_history 7 / test_m1_cli 5)
-  - 新增 docs/context/CHATGPT_MEMORY.md + AGENT_MEMORY.md + README.md
+- **M1 FINAL STABILIZATION BATCH**(数据一致性全面加固):
+  1. **confirm 文件事务化**: draft+confirmed+project.json+history 四文件操作; 任何一步失败 → 完整 rollback(恢复旧 project.json/draft、删除新建 confirmed、恢复内存 metadata); draft 删除失败 = confirm 整体失败(不留下双份)。
+  2. **history 完整 confirm undo**: 记录改为 changes 列表(project.json+draft+confirmed 三目标); undo-last 成组恢复(恢复 project.json/draft、删除 confirmed); 恢复后同步 Project 内存 metadata(不要求重开进程)。
+  3. **history 严格 schema**: 非空坏行 → DataIntegrityError(不 silent skip); seq/operation/timestamp/changes 校验; _next_seq 拒绝损坏 index(防重复 seq)。
+  4. **validate 跨文件检查**: duplicate(draft+confirmed 同编号)/ current_chapter==max(confirmed)/ 文件名-frontmatter 章节号一致。
+  5. **list 不隐藏冲突**: 同编号多条 → 全部返回 + conflict 标记 + CONFLICT 状态(CLI 显示 [冲突!])。
+  6. **metadata 严格类型**: current_chapter/current_volume/auto_accept/name/defaults 等驱动字段非法值(str/bool/float/负/null)→ DataIntegrityError, 不偷偷转换; property 直接返回。
+  7. **update guards**: reviewing/ready 拒绝更新; origin=ai 拒绝(M1 manual 入口不绕过 AI 边界); user_confirmed 更新后回 draft。
+  8. **frontmatter roundtrip**: characters 用 JSON 表示(list[str] 严格); title 含 CR/LF 拒绝(保证 Core 写出的数据 Core 能读回)。
 
 ## 4. 本轮修改文件
 
-- `M .ai-handoff/NEXT_TASKS.md`
-- ` M .ai-handoff/PROJECT_STATE.md`
-- ` M adapters/cli/main.py`
-- `?? README.md`
-- `?? adapters/cli/commands.py`
-- `?? core/chapter.py`
-- `?? core/history.py`
-- `?? core/project.py`
-- `?? core/storage.py`
-- `?? docs/`
-- `?? tests/test_chapter.py`
-- `?? tests/test_history.py`
-- `?? tests/test_m1_cli.py`
-- `?? tests/test_project.py`
-- `?? tests/test_storage.py`
+- `M .ai-handoff/PROJECT_STATE.md`
+- ` M adapters/cli/commands.py`
+- ` M core/chapter.py`
+- ` M core/history.py`
+- ` M core/project.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M tests/test_history.py`
+- `?? tests/test_stabilization.py`
 
 ## 5. 已验证结果
 
-- 单元测试 **128/128 PASS**(M0 66 + M1 62)。
-- Acceptance A-I 真实 CLI 验收全部 PASS(临时数据目录, 已清理)。
-- M0 回归: Config/SecretStore/checkpoint 安全/set-key 全部保持通过。
-- 章节数据闭环: 写入→重开→读回 UTF-8 完全一致; current_chapter 只随 confirm 推进; 旧章节 confirm 不倒退; confirmed 保护; 多小说隔离; 损坏检测无 traceback。
+- 单元测试 **162/162 PASS**(含 32 个稳定化测试: 故障注入 A/B/C/D / 崩溃残留 / metadata 损坏 9 例 / history 损坏 / roundtrip / guards)。
+- Acceptance J(confirm undo): confirm→undo→重启进程→draft=v2/confirmed 无/current_chapter=0/validate PASS。
+- Acceptance K(失败 rollback): 4 类故障注入(写 confirmed/写 project.json/删 draft/history 快照失败)→ 磁盘恢复 confirm 前状态(单元测试断言)。
+- Acceptance L(跨文件): duplicate 检测 + list CONFLICT 显示 / metadata str 损坏报错 exit=1 无 traceback / current_chapter 不一致检测 — 全部 CLI 真实验证。
+- M1 正常路径回归(create→write→reopen→update→undo→confirm→reopen)保持 PASS。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
-- Core/Adapter 边界: 新增 core 文件无 argparse/终端 IO。
 
 ## 6. 未验证内容
 
@@ -96,25 +89,27 @@ ai-novel-studio/
 
 ## 10. 下一步建议
 
-- P0: 等待 External ChatGPT M1 review。
+- P0: 等待 External ChatGPT M1 final review。
 - P1: M2(Provider + config test-provider)仅在明确授权后开始。
 
 ## 11. 希望外部模型重点审查
 
-- 数据闭环是否可靠(重开/UTF-8/状态机/current_chapter)。
-- confirmed 保护 / 路径安全 / 损坏检测是否无口。
-- .history snapshot 与 undo 是否真实可用(非摆设)。
-- 多小说隔离。
-- M0 回归。
+- confirm 事务: 故障注入 rollback 是否完整(4 类)。
+- confirm undo: 成组恢复 + 内存同步 + 磁盘一致。
+- validate 跨文件: duplicate / current_chapter / filename 一致性。
+- metadata 严格类型: 所有损坏路径。
+- history 严格 schema: 坏行/坏 seq/backup 缺失。
+- frontmatter roundtrip: list + 换行拒绝。
+- update guards: 状态/origin。
 
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: 87f229752264 ai-checkpoint: update 1 files
+- checkpoint_base_commit: 45a9505b5486 ai-checkpoint: add 12 new files
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): 87f2297 2026-08-12 13:07:01 +0800
-- 时间: 2026-08-12 13:29
+- 最近 commit(本文件生成时): 45a9505 2026-08-12 13:29:27 +0800
+- 时间: 2026-08-12 13:59
 
 ## 13. Critical Files
 
@@ -127,4 +122,4 @@ ai-novel-studio/
 
 ## 14. Recent Important Changes
 
-- M1 COMPLETE BATCH: 小说项目 + 章节数据闭环完成, 128/128 测试通过, Acceptance A-I 全 PASS(详见 last_round)。
+- M1 FINAL STABILIZATION: confirm 事务化 + history 完整 undo + validate 跨文件 + metadata 严格 + guards + frontmatter roundtrip, 162/162 测试通过, Acceptance J/K/L 全 PASS(详见 last_round)。

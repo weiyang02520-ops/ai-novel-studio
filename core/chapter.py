@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -61,12 +62,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
             except ValueError:
                 raise DataIntegrityError(f"frontmatter 字段 {key} 需要整数, 实际: {val!r}")
         elif key in FM_LIST_FIELDS:
-            # 格式: [a, b] 或 [] 或空
-            if val in ("", "[]"):
-                meta[key] = []
-            else:
-                inner = val.strip("[]").strip()
-                meta[key] = [x.strip() for x in inner.split(",")] if inner else []
+            # JSON 表示: ["a", "b"] / [] — 严格 list[str]
+            try:
+                parsed = json.loads(val)
+            except json.JSONDecodeError:
+                raise DataIntegrityError(f"frontmatter 字段 {key} 需要 JSON 数组, 实际: {val!r}")
+            if not isinstance(parsed, list) or not all(isinstance(x, str) for x in parsed):
+                raise DataIntegrityError(f"frontmatter 字段 {key} 需要 list[str], 实际: {val!r}")
+            meta[key] = parsed
         elif key in FM_BOOL_FIELDS:
             meta[key] = val.lower() == "true"
         else:
@@ -85,7 +88,10 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def build_frontmatter(meta: dict[str, Any]) -> str:
-    """按固定字段顺序生成 frontmatter 块(round-trip 稳定)。"""
+    """按固定字段顺序生成 frontmatter 块(round-trip 稳定)。
+
+    安全规则: 标量值不得含 CR/LF(否则生成的文件自己读不回来)。
+    """
     order = ["chapter", "volume", "title", "status", "origin", "words", "created_at", "updated_at", "summary", "characters"]
     lines = ["---"]
     for key in order:
@@ -93,11 +99,18 @@ def build_frontmatter(meta: dict[str, Any]) -> str:
             continue
         val = meta[key]
         if key in FM_LIST_FIELDS:
-            lines.append(f"{key}: {val!r}" if isinstance(val, list) else f"{key}: []")
+            # 用 JSON 表示 list, 严格 round-trip
+            if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+                raise DataIntegrityError(f"frontmatter 字段 {key} 需要 list[str], 实际: {val!r}")
+            lines.append(f"{key}: {json.dumps(val, ensure_ascii=False)}")
         elif key in FM_INT_FIELDS:
             lines.append(f"{key}: {int(val)}")
         else:
-            lines.append(f"{key}: {val}")
+            sval = str(val)
+            if "\n" in sval or "\r" in sval:
+                raise DataIntegrityError(
+                    f"frontmatter 字段 {key} 不允许包含换行(会破坏文件可读性): {sval[:20]!r}")
+            lines.append(f"{key}: {sval}")
     lines.append("---")
     return "\n".join(lines) + "\n"
 
@@ -243,9 +256,15 @@ def read_draft(project: Project, number: int) -> Chapter:
 
 def update_draft(project: Project, number: int, title: Optional[str] = None,
                  content: Optional[str] = None) -> Chapter:
-    """更新草稿(仅 draft/user_confirmed 状态; 已确认正文受保护)。
+    """更新草稿。
 
-    修改前自动 snapshot(history)。
+    状态 guard(真实执行):
+      - draft → 允许
+      - user_confirmed → 允许(更新后回 draft)
+      - reviewing / ready / confirmed → 拒绝
+    origin guard:
+      - origin=ai → 拒绝(M1 普通 manual 入口不得绕过未来 AI 边界)
+    已确认正文受保护。修改前自动 snapshot(history)。
     """
     _validate_number(number)
     confirmed = confirmed_path(project, number)
@@ -256,19 +275,28 @@ def update_draft(project: Project, number: int, title: Optional[str] = None,
     if not path.exists():
         raise StorageError(f"草稿不存在: drafts/{path.name}(请先使用 chapter write)")
 
-    # 修改前快照(已有内容)
-    from .history import snapshot
-    snapshot(project, "chapter.update", f"drafts/{path.name}")
-
     text = _read_any(path, "无法读取草稿")
     meta, body = parse_frontmatter(text)
     _check_chapter_number_consistency(meta, path)
+
+    status = meta["status"]
+    if status not in ("draft", "user_confirmed"):
+        raise StorageError(
+            f"当前 status={status!r}, 仅 draft/user_confirmed 可更新")
+    if meta["origin"] != "manual":
+        raise StorageError(
+            f"当前 origin={meta['origin']!r}, M1 手动入口仅支持 manual 草稿")
+
+    # 修改前快照(已有内容)
+    from .history import snapshot
+    snapshot(project, "chapter.update", f"drafts/{path.name}")
 
     new_meta = dict(meta)
     if title is not None:
         new_meta["title"] = title
     if content is not None:
         body = content
+    new_meta["status"] = "draft"  # user_confirmed 更新后回 draft
     new_meta["words"] = count_words(body)
     new_meta["updated_at"] = _now_iso()
     chapter = Chapter(new_meta, body, path, is_draft=True)
@@ -277,14 +305,18 @@ def update_draft(project: Project, number: int, title: Optional[str] = None,
 
 
 def confirm_draft(project: Project, number: int) -> Chapter:
-    """手动确认草稿: DRAFT → USER_CONFIRMED → CONFIRMED。
+    """手动确认草稿 — 文件事务式多文件操作。
 
-    规则:
-      - 草稿必须存在;
-      - status 必须为 draft(或 user_confirmed, 允许重复确认幂等);
-      - origin=ai 且 status != ready → 拒绝(M1 尚未创建 ai, 但状态边界不留口);
-      - confirm 后才更新 current_chapter(max 语义);
-      - 多文件操作: 先验证 → 原子写 project.json → 原子写 confirmed → 删 draft。
+    事务边界: drafts/chNNNN.draft.md + chapters/chNNNN.md + project.json + history。
+    任何一步失败 → 恢复 confirm 前状态(磁盘 + 内存 metadata)。
+    绝不留下: current_chapter 已推进但 confirmed 不存在 / confirmed 存在但未推进 /
+              draft+confirmed 双份且系统认为正常。
+
+    流程:
+      1. 完整验证输入
+      2. 快照全部 3 个目标(history, changes 列表)
+      3. 写 confirmed → 4. 更新 project.json → 5. 删除 draft
+      6. 任一步异常 → rollback(恢复旧 project.json/draft, 删除新建 confirmed)
     """
     _validate_number(number)
     path = draft_path(project, number)
@@ -309,7 +341,17 @@ def confirm_draft(project: Project, number: int) -> Chapter:
     if confirmed.exists():
         raise DataIntegrityError(f"已存在确认章节 chapters/{confirmed.name}, 拒绝覆盖")
 
-    # 新 frontmatter(收编后)
+    # 内存旧状态(rollback 用)
+    old_metadata = dict(project.metadata)
+    old_draft_text = text
+    draft_rel = f"drafts/{path.name}"
+    confirmed_rel = f"chapters/{confirmed.name}"
+
+    # 1) history 快照(3 个目标的 changes 列表, 供完整 undo)
+    from .history import snapshot_multi
+    snapshot_multi(project, "chapter.confirm", [draft_rel, "project.json", confirmed_rel])
+
+    # 2) 准备 confirmed 内容
     now = _now_iso()
     new_meta = dict(meta)
     new_meta["status"] = "confirmed"
@@ -317,22 +359,36 @@ def confirm_draft(project: Project, number: int) -> Chapter:
     new_meta["updated_at"] = now
     confirmed_chapter = Chapter(new_meta, body, confirmed, is_draft=False)
 
-    # 顺序: project.json 先更新(原子, 修改前快照), 再写 confirmed, 最后删 draft
-    # (崩溃残留: open/validate 能检测 chapters/ 中 status != confirmed 或 draft 残留)
-    old_current = project.current_chapter
-    new_current = max(old_current, number)
-    if new_current != old_current:
-        from .history import snapshot
-        snapshot(project, "chapter.confirm", "project.json")
-        project.metadata["current_chapter"] = new_current
-        project.metadata["updated_at"] = now
-        project.save_metadata()
-
-    atomic_write_text(confirmed, confirmed_chapter.render())
+    # 3) 写入 confirmed → 4) 更新 project.json → 5) 删除 draft
+    #    任一步失败 → rollback
     try:
+        atomic_write_text(confirmed, confirmed_chapter.render())
+
+        old_current = project.current_chapter
+        new_current = max(old_current, number)
+        if new_current != old_current:
+            project.metadata["current_chapter"] = new_current
+            project.metadata["updated_at"] = now
+            project.save_metadata()
+
+        # draft 删除失败 = confirm 整体失败(不能留下双份)
         path.unlink()
-    except OSError:
-        pass  # draft 删除失败不致命(validate 会报告残留)
+    except Exception as e:
+        # ── rollback: 恢复 confirm 前状态 ──
+        try:
+            if confirmed.exists():
+                confirmed.unlink()
+            if (project.dir / "project.json").exists():
+                atomic_write_text(project.dir / "project.json",
+                                  json.dumps(old_metadata, ensure_ascii=False, indent=2))
+            if not path.exists():
+                atomic_write_text(path, old_draft_text)
+        except Exception:
+            pass  # rollback 尽力而为; 主异常优先抛出
+        project.metadata = old_metadata  # 恢复内存状态
+        if isinstance(e, (StorageError, DataIntegrityError)):
+            raise
+        raise StorageError(f"确认章节失败(已回滚): {e}")
 
     return confirmed_chapter
 
@@ -353,32 +409,35 @@ def read_confirmed(project: Project, number: int) -> Chapter:
 def list_chapters(project: Project) -> list[dict[str, Any]]:
     """列出全部章节(草稿 + 已确认), 按章节号排序。
 
-    返回: [{chapter, title, status, words, updated_at, location: draft|confirmed}]
+    同编号 draft+confirmed 冲突: 不静默隐藏 — 标记 conflict=True, 两条都返回。
+    返回: [{chapter, title, status, words, updated_at, location, conflict?}]
     """
-    entries: dict[int, dict[str, Any]] = {}
+    entries: dict[int, list[dict[str, Any]]] = {}
+
+    def add_entry(n: int, e: dict[str, Any]) -> None:
+        entries.setdefault(n, []).append(e)
 
     drafts_dir = project.store.safe_path(project.id, "drafts")
     if drafts_dir.exists():
         for f in sorted(drafts_dir.iterdir()):
             if not f.is_file() or not f.name.endswith(".draft.md"):
                 continue
-            # "ch0001.draft.md" → 去掉 .draft.md → "ch0001" → 解析
             base = f.name[: -len(".draft.md")]
             n = parse_chapter_number_from_filename(base + ".md")
             if n is None:
                 continue
             try:
                 meta = read_draft_file(f)
-                entries[n] = {
+                add_entry(n, {
                     "chapter": n, "title": meta.get("title", ""),
                     "status": meta.get("status", "?"), "words": int(meta.get("words", 0)),
                     "updated_at": meta.get("updated_at", ""), "location": "draft",
-                }
+                })
             except DataIntegrityError:
-                entries[n] = {
+                add_entry(n, {
                     "chapter": n, "title": "(损坏)", "status": "INVALID",
                     "words": 0, "updated_at": "", "location": "draft",
-                }
+                })
 
     chapters_dir = project.store.safe_path(project.id, "chapters")
     if chapters_dir.exists():
@@ -390,18 +449,27 @@ def list_chapters(project: Project) -> list[dict[str, Any]]:
                 continue
             try:
                 meta = read_confirmed_chapter_file(f)
-                entries[n] = {
+                add_entry(n, {
                     "chapter": n, "title": meta.get("title", ""),
                     "status": meta.get("status", "?"), "words": int(meta.get("words", 0)),
                     "updated_at": meta.get("updated_at", ""), "location": "confirmed",
-                }
+                })
             except DataIntegrityError:
-                entries[n] = {
+                add_entry(n, {
                     "chapter": n, "title": "(损坏)", "status": "INVALID",
                     "words": 0, "updated_at": "", "location": "confirmed",
-                }
+                })
 
-    return [entries[k] for k in sorted(entries)]
+    result: list[dict[str, Any]] = []
+    for n in sorted(entries):
+        group = entries[n]
+        conflict = len(group) > 1  # 同编号多条 = 冲突
+        for e in group:
+            if conflict:
+                e["conflict"] = True
+                e["status"] = "CONFLICT"
+            result.append(e)
+    return result
 
 
 def _validate_number(number: int) -> None:

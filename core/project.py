@@ -118,15 +118,13 @@ class Project:
 
     @property
     def current_chapter(self) -> int:
-        v = self.metadata.get("current_chapter", 0)
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return 0
+        # open_project 已严格验证类型; 直接返回(坏数据 → DataIntegrityError, 不静默当 0)
+        return self.metadata["current_chapter"]
 
     @property
     def auto_accept(self) -> bool:
-        return bool(self.metadata.get("auto_accept", False))
+        # open_project 已严格验证 bool; 直接返回(不做 Python 隐式 bool 转换)
+        return self.metadata["auto_accept"]
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.metadata)
@@ -236,7 +234,51 @@ def open_project(store: ProjectStore, project_id: str) -> Project:
         raise DataIntegrityError(
             f"{project_id}: project.json id 与目录不一致({metadata.get('id')!r} != {project_id!r})")
 
+    # ── 驱动字段严格类型验证(不偷偷转换坏值) ──
+    _validate_metadata_types(metadata, project_id)
+
     return Project(store, project_id, pdir, metadata)
+
+
+def _validate_metadata_types(metadata: dict[str, Any], project_id: str) -> None:
+    """project.json 驱动字段严格类型验证。非法 → DataIntegrityError。"""
+
+    def bad(field: str, expect: str, actual: Any) -> DataIntegrityError:
+        return DataIntegrityError(
+            f"{project_id}: project.json 字段 {field} 需要 {expect}, 实际: {actual!r}")
+
+    fv = metadata.get("format_version")
+    if not isinstance(fv, int) or isinstance(fv, bool):
+        raise bad("format_version", "int", fv)
+
+    name = metadata.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise bad("name", "非空 str", name)
+
+    status = metadata.get("status")
+    if not isinstance(status, str) or not status:
+        raise bad("status", "str", status)
+
+    cv = metadata.get("current_volume")
+    if not isinstance(cv, int) or isinstance(cv, bool) or cv < 1:
+        raise bad("current_volume", "int >= 1", cv)
+
+    cc = metadata.get("current_chapter")
+    if not isinstance(cc, int) or isinstance(cc, bool) or cc < 0:
+        raise bad("current_chapter", "int >= 0", cc)
+
+    aa = metadata.get("auto_accept")
+    if not isinstance(aa, bool):
+        raise bad("auto_accept", "bool", aa)
+
+    for f in ("created_at", "updated_at"):
+        v = metadata.get(f)
+        if not isinstance(v, str) or not v:
+            raise bad(f, "str", v)
+
+    defaults = metadata.get("defaults")
+    if not isinstance(defaults, dict):
+        raise bad("defaults", "object", defaults)
 
 
 def list_projects(store: ProjectStore) -> list[dict[str, Any]]:
@@ -274,37 +316,77 @@ def list_projects(store: ProjectStore) -> list[dict[str, Any]]:
 def validate_project(store: ProjectStore, project_id: str) -> list[str]:
     """项目一致性验证, 返回问题列表(空 = 通过)。
 
-    检查: project.json 完整 / id 一致 / chapters 状态合法 / drafts 状态合法。
+    跨文件检查:
+      - chapters/: status=confirmed + 文件名/frontmatter 章节号一致
+      - drafts/: status 合法 + 文件名/frontmatter 章节号一致
+      - duplicate: 同编号 draft+confirmed 同时存在 → INVALID
+      - current_chapter == max(confirmed chapter numbers, default=0)
     """
     issues: list[str] = []
     proj = open_project(store, project_id)  # 抛 DataIntegrityError
 
-    # chapters/: 必须 status=confirmed
+    from .chapter import (
+        parse_chapter_number_from_filename,
+        read_confirmed_chapter_file,
+        read_draft_file,
+    )
+
+    confirmed_numbers: list[int] = []
+    draft_numbers: list[int] = []
+
+    # chapters/
     chapters_dir = proj.dir / "chapters"
     if chapters_dir.exists():
         for f in sorted(chapters_dir.iterdir()):
             if not f.is_file() or not f.name.endswith(".md"):
                 continue
-            from .chapter import read_confirmed_chapter_file
             try:
                 meta = read_confirmed_chapter_file(f)
-                if meta.get("status") != "confirmed":
-                    issues.append(f"chapters/{f.name}: status={meta.get('status')!r}(应为 confirmed)")
             except DataIntegrityError as e:
                 issues.append(f"chapters/{f.name}: {e}")
+                continue
+            if meta.get("status") != "confirmed":
+                issues.append(f"chapters/{f.name}: status={meta.get('status')!r}(应为 confirmed)")
+            # 文件名/frontmatter 一致性
+            parsed = parse_chapter_number_from_filename(f.name)
+            if parsed is not None and parsed != int(meta["chapter"]):
+                issues.append(
+                    f"chapters/{f.name}: frontmatter chapter={meta['chapter']} 与文件名不一致({parsed})")
+            else:
+                confirmed_numbers.append(int(meta["chapter"]))
 
-    # drafts/: 必须 status=draft 或 user_confirmed(未收编)
+    # drafts/
     drafts_dir = proj.dir / "drafts"
     if drafts_dir.exists():
         for f in sorted(drafts_dir.iterdir()):
             if not f.is_file() or not f.name.endswith(".draft.md"):
                 continue
-            from .chapter import read_draft_file
             try:
                 meta = read_draft_file(f)
-                if meta.get("status") not in ("draft", "user_confirmed"):
-                    issues.append(f"drafts/{f.name}: status={meta.get('status')!r}(应为 draft/user_confirmed)")
             except DataIntegrityError as e:
                 issues.append(f"drafts/{f.name}: {e}")
+                continue
+            if meta.get("status") not in ("draft", "user_confirmed"):
+                issues.append(
+                    f"drafts/{f.name}: status={meta.get('status')!r}(应为 draft/user_confirmed)")
+            base = f.name[: -len(".draft.md")]
+            parsed = parse_chapter_number_from_filename(base + ".md")
+            if parsed is not None and parsed != int(meta["chapter"]):
+                issues.append(
+                    f"drafts/{f.name}: frontmatter chapter={meta['chapter']} 与文件名不一致({parsed})")
+            else:
+                draft_numbers.append(int(meta["chapter"]))
+
+    # duplicate: 同编号 draft + confirmed 同时存在
+    dup = sorted(set(draft_numbers) & set(confirmed_numbers))
+    for n in dup:
+        issues.append(f"章节 {n}: drafts/ 与 chapters/ 同时存在(duplicate, 数据冲突)")
+
+    # current_chapter == max(confirmed, default=0)
+    expected = max(confirmed_numbers) if confirmed_numbers else 0
+    if proj.current_chapter != expected:
+        issues.append(
+            f"project.json current_chapter={proj.current_chapter}, "
+            f"但已确认章节最大编号={expected}(不一致)")
 
     return issues
