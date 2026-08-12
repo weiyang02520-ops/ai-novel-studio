@@ -31,3 +31,17 @@
 - ` M scripts/ai_checkpoint.py`
 - ` M tests/test_m0.py`
 
+
+## 2026-08-12 12:47 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M adapters/cli/main.py`
+- ` M core/config.py`
+- ` M llm/secret_store.py`
+- ` M scripts/ai_checkpoint.py`
+- ` M tests/test_m0.py`
+- `?? tests/test_checkpoint.py`
+

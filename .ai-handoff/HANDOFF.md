@@ -10,106 +10,106 @@
 
 ## 2. 当前阶段
 
-**M0 修复完成(第二次 PASS)**: 第一轮代码审核的 8 项修复全部落实, 30/30 测试通过。
+**M0 Final External Review fixes completed. Awaiting External ChatGPT re-review.**
+(M0 FINAL Gate 未授权; M1 NOT AUTHORIZED。)
 
 ## 3. 本轮完成内容
 
-- M0 第一次外部代码审核通过(方向正确), 完成 8 项修复:
-  1. 仓库可见性: API 实测为 public(创建时 private, 之后被改动) — 不擅自改, 待用户决定
-  2. ConfigError: JSON 语法/根节点非 object/models 非 object/temperature/max_context_tokens 类型错误 → 人类可读错误 + exit 1, 无 traceback
-  3. 默认配置合并: 空配置 save 后 reserve_output_tokens/max_recent_*/max_review_rounds/max_tool_calls_per_turn/max_snapshots/auto_accept 全部保留
-  4. config set 白名单 + 类型转换(12 个字段), 未知字段拒绝, 敏感字段(api_key/token/password/secret/credential)拒绝
-  5. SecretStore 错误语义: KEY_NOT_FOUND / BACKEND_UNAVAILABLE / BACKEND_ERROR; keyring 列入正式依赖, pytest 为 dev 依赖
-  6. checkpoint 安全扫描: .env/.key/.pem/credentials/secrets 按路径级拦截(非内容匹配); 高风险二进制(exe/dll/7z/apk 等)默认阻止 push; 文本分块扫描(全文件, 非仅前 512KB)
-  7. 交接状态同步(本文件)
-  8. 全量 M0 验收重跑
+- 完成 M0 Final Review 的 7 项修复:
+  1. **checkpoint 安全扫描文件集合修复**: 弃用 porcelain 字符串解析, 改用 NUL-separated 三命令合并(git diff --name-only -z / git diff --cached --name-only -z / git ls-files --others --exclude-standard -z), 保证"扫描集合 ⊇ git add -A 提交集合"(修复: 新目录整体被 isfile 跳过但 add -A 会纳入)。
+  2. **checkpoint 生产测试**: 新增 tests/test_checkpoint.py(11 用例, 临时 git 仓库真实模拟): 新目录/嵌套/敏感路径/secret 内容/rename/空格/Unicode/高风险二进制/大文本后半段 secret/图片白名单/三种 Git 状态/删除文件。
+  3. **set-key TTY 安全**: TTY 环境只允许 getpass(隐藏输入), getpass 失败 → 明确报错 exit 1, 绝不 fallback input()(防 Key 显示在屏幕)。非 TTY(pipe/CI)允许 stdin 读取, stdout/stderr/异常不含 Key。
+  4. **SecretStore 错误语义**: keyring 包可 import ≠ 系统凭据服务可用(新增可用性探测: get_keyring + 空读探测, NullKeyring/异常 → BACKEND_UNAVAILABLE); NOVEL_DISABLE_KEYRING=1 对 get/set/delete/exists 全路径一致; 错误消息不携带原始异常/真实 Key。
+  5. **JSON 严格类型校验**(load 入口): temperature=true / temperature="0.8" / max_context_tokens=1.5 / max_context_tokens=true / tool_calls="true" / capabilities 非 object → ConfigError。CLI config set 的字符串转换独立保留(不同入口)。
+  6. **load 时默认配置立即完整**: _from_dict 先 deep-merge DEFAULT_SETTINGS, load 部分配置后立即得到完整默认结构(不再依赖 save 补齐); 未知扩展字段保留。
+  7. **交接文档修正**: NEXT_TASKS/PROJECT_STATE 反映真实 Gate 状态(不声称 PASS, 等待 External 复核)。
 
 ## 4. 本轮修改文件
 
-- `M .ai-handoff/PROJECT_STATE.md`
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
 - ` M adapters/cli/main.py`
 - ` M core/config.py`
 - ` M llm/secret_store.py`
-- ` M pyproject.toml`
 - ` M scripts/ai_checkpoint.py`
 - ` M tests/test_m0.py`
+- `?? tests/test_checkpoint.py`
 
 ## 5. 已验证结果
 
-- 单元测试 **30/30 PASS**(含非法 JSON/错误类型/未知字段/敏感拒绝/keyring 不可用/Key 不回显)
-- CLI: --help / config validate(合法+非法+损坏 JSON)/ config set(白名单/类型/敏感)/ set-key(可用+不可用后端)全部真实运行
-- SecretStore: Windows Credential Manager 真实读写(set/get/exists/delete)通过; keyring 不可用时清晰报错
-- settings.json 无任何 Key(grep 验证)
-- checkpoint: 敏感文件路径拦截(3 类真实文件测试通过)、远程 owner/repo 自动解析('weiyang02520-ops'/'ai-novel-studio')
-- Core 无 argparse/click/终端 IO 依赖(静态检查)
+- 单元测试 **57/57 PASS**(46 test_m0 + 11 test_checkpoint)。
+- checkpoint 文件集合: 新目录内嵌套文件/空格文件名/Unicode 文件名全部进入扫描集合(真实验证)。
+- CLI 全错误路径无 traceback: 非法 JSON/root list/models string/capabilities 非 object/temperature bool/max_context float/未知字段/敏感字段/非法 int/SecretStore unavailable — 全部人类可读 + exit 码合理。
+- SecretStore: NOVEL_DISABLE_KEYRING=1 时 get/set/delete/exists 一致返回 BACKEND_UNAVAILABLE(测试覆盖)。
+- Core/Adapter 边界静态检查: core/ llm/ tools/ agents/ 无 argparse/click/终端 IO/CLI 依赖/GUI 框架; SecretStore 无终端交互。
+- 依赖: 正式仅 keyring, dev 仅 pytest(未新增)。
 
 ## 6. 未验证内容
 
-- 联网测试(M2 config test-provider 才做)
-- M1+ 功能(项目/章节 CRUD)
-- 真实 API Key 端到端对话(M2)
+- Windows Credential Manager 真实读写验证(本轮将执行, 见下文 REAL_ENV)。
+- 联网测试(M2 config test-provider 才做)。
+- M1+ 功能(项目/章节 CRUD)未实现。
 
 ## 7. 当前架构
 
 ```
 ai-novel-studio/
-├── core/          # Core Engine(无 UI 依赖): config.py 等
-├── agents/        # Agent 定义(M3+)
-├── llm/           # provider.py(M2+)/secret_store.py(已实现)
-├── tools/         # 工具系统(M3+)
+├── core/          # Core Engine(无 UI 依赖): config.py
+├── agents/        # Agent 定义(M3+, 空)
+├── llm/           # secret_store.py(已实现); provider.py(M2+)
+├── tools/         # 工具系统(M3+, 空)
 ├── adapters/cli/  # CLI Adapter(M0-M7 测试入口, 唯一允许 argparse)
 ├── config/        # settings.json(非敏感)
 ├── data/          # 小说项目数据(本地)
-├── tests/         # 单元测试(13 个)
-└── scripts/       # ai_checkpoint.py(交接)
+├── tests/         # test_m0.py(46) + test_checkpoint.py(11)
+└── scripts/       # ai_checkpoint.py(交接, NUL-separated 扫描)
 ```
 
 ## 8. 当前已知问题
 
-- **GitHub 仓库当前可见性为 public**(API 实测, 创建时曾为 private) — 若需私有请用户在 GitHub 网页端修改(Settings → Danger Zone → Change visibility), 我未擅自改动。
-- Linux headless 无凭据服务时, SecretStore 写入会明确报错并建议环境变量(设计如此, 不降级明文)。
+- **GitHub 仓库当前可见性为 public**(API 实测, 创建时曾为 private) — 若需私有请用户在 GitHub 网页端修改, 我未擅自改动。这是事实记录, 不是本轮开发任务。
+- Linux headless 无凭据服务时, SecretStore 写入会明确报错(BACKEND_UNAVAILABLE)并建议环境变量(设计如此, 不降级明文)。
 
 ## 9. 本轮关键决策
 
-- Core 与 Adapter 严格分离: Core 可被 Python 库方式调用, 换 GUI 不重写核心。
-- 配置本地校验不联网(config validate); 联网测试留到 M2 config test-provider(HEAD 探测已废弃)。
-- API Key 只进 SecretStore(系统凭据管理器), 环境变量为开发回退。
-- config set 白名单制(未知/敏感字段拒绝), 类型严格转换。
-- checkpoint 安全扫描: 敏感文件按路径拦截, 高风险二进制默认阻止, 文本分块扫描。
-- 设计完全依据 clean-room/(逆向仓库), 不包含 XingLu 任何代码/资源。
+- checkpoint 扫描集合用 Git 机器可读输出(NUL-separated), 不解析人类可读 porcelain(避免目录折叠/转义/rename 解析错误)。
+- set-key: TTY 强制隐藏输入, 失败即中止(安全性优先于便利性)。
+- SecretStore 可用性: 探测真实后端(get_keyring + 空读), 不以"包可 import"为准。
+- JSON load 严格类型 vs CLI 宽松转换: 两个入口分开, 不自动修正错误配置。
+- 默认配置在 load 时 merge(用户覆盖默认), 保证 load 后立即完整。
 
 ## 10. 下一步建议
 
-- P0: 用户决定仓库可见性(private/public)。
-- P0: ChatGPT 对 M0 修复做最终复核。
-- P1: 复核通过后 M1 开发(新建小说、保存章节, 手动 confirm 路径)。
+- P0: 等待 External ChatGPT re-review(M0 FINAL Gate)。
+- P1: 仅在明确授权后进入 M1(NOT AUTHORIZED YET)。
 
 ## 11. 希望外部模型重点审查
 
-- 8 项修复是否全部落实(对应本文件 last_round)。
-- ConfigError 覆盖是否完整(所有损坏配置路径)。
-- 默认配置合并是否有遗漏。
-- set 白名单是否过严/过松(models.<role> 动态匹配)。
-- SecretStore 三错误码语义与 CLI 展示。
-- checkpoint 安全扫描(路径拦截/二进制阻止/分块)是否有误报或漏报。
+- 7 项修复是否全部落实(对应 last_round)。
+- checkpoint 文件集合是否满足"扫描集合 ⊇ 提交集合"(含 rename/新目录/空格/Unicode)。
+- set-key TTY 安全(无 fallback input)。
+- SecretStore 三错误码语义与 keyring 可用性探测。
+- JSON 严格类型与 CLI 转换分离是否完整。
+- load 时默认 merge 是否破坏未知扩展字段。
 
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: c4aaf874a749 ai-checkpoint: add 11 new files
+- checkpoint_base_commit: 6c3f09f6084f ai-checkpoint: update 1 files
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): c4aaf87 2026-08-09 16:08:26 +0800
-- 时间: 2026-08-09 17:06
+- 最近 commit(本文件生成时): 6c3f09f 2026-08-09 17:06:56 +0800
+- 时间: 2026-08-12 12:47
 
 ## 13. Critical Files
 
-- core/config.py — 配置系统(ConfigError/默认合并/白名单)
-- llm/secret_store.py — 密钥安全存储(三错误码)
-- adapters/cli/main.py — CLI 入口(无 traceback)
-- tests/test_m0.py — M0 测试(30 个)
-- scripts/ai_checkpoint.py — 交接(remote 自动解析 + 安全扫描)
+- core/config.py — 配置系统(严格类型/load merge/白名单)
+- llm/secret_store.py — 密钥安全存储(三错误码/可用性探测)
+- adapters/cli/main.py — CLI 入口(TTY 安全 set-key, 无 traceback)
+- scripts/ai_checkpoint.py — 交接(NUL-separated 扫描集合)
+- tests/test_m0.py — 配置/SecretStore/CLI 测试(46)
+- tests/test_checkpoint.py — checkpoint 生产测试(11)
 
 ## 14. Recent Important Changes
 
-- M0 第一轮代码审核 8 项修复全部完成, 30/30 测试通过(详见 last_round)。
+- M0 Final Review 7 项修复全部完成, 57/57 测试通过(详见 last_round)。

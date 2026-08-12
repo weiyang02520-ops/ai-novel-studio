@@ -46,29 +46,24 @@ class ConfigError(Exception):
 
 
 def _as_float(value: Any, field_path: str, path: Path) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"'{field_path}' 需要是数字, 实际: {value!r}", path=path)
+    """JSON load 严格类型: 只接受 number; 拒绝 bool(如 true → 1.0)与字符串。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"'{field_path}' 需要是数字(JSON number), 实际: {value!r}", path=path)
+    return float(value)
 
 
 def _as_int(value: Any, field_path: str, path: Path) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"'{field_path}' 需要是整数, 实际: {value!r}", path=path)
+    """JSON load 严格类型: 只接受整数; 拒绝 bool 与 float(如 1.5 → 1 不允许)。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"'{field_path}' 需要是整数(JSON integer), 实际: {value!r}", path=path)
+    return value
 
 
 def _as_bool(value: Any, field_path: str, path: Path) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("true", "1", "yes", "on"):
-            return True
-        if v in ("false", "0", "no", "off"):
-            return False
-    raise ConfigError(f"'{field_path}' 需要是布尔值(true/false), 实际: {value!r}", path=path)
+    """JSON load 严格类型: 只接受 true/false; 拒绝 "true" / 1(CLI 转换单独处理)。"""
+    if not isinstance(value, bool):
+        raise ConfigError(f"'{field_path}' 需要是布尔值(JSON true/false), 实际: {value!r}", path=path)
+    return value
 
 
 def _as_dict(value: Any, field_path: str, path: Path) -> dict:
@@ -187,9 +182,15 @@ class Settings:
 
     @classmethod
     def _from_dict(cls, raw: Any, path: Path) -> "Settings":
+        """从 dict 构建 Settings。
+
+        先做默认配置深度合并(user 覆盖 default), 保证 load 后立即得到完整默认结构
+        (不依赖 save 才补默认值)。未知扩展字段保留(merge 只补 known defaults)。
+        """
         raw = _as_dict(raw, "根节点", path)
-        default = raw.get("default_model", {})
-        models_raw = raw.get("models")
+        merged = _deep_merge_defaults(raw)
+        default = merged.get("default_model", {})
+        models_raw = merged.get("models")
         if models_raw is None:
             models_raw = {}
         models_raw = _as_dict(models_raw, "models", path)
@@ -200,10 +201,10 @@ class Settings:
         return cls(
             default_model=ModelConfig.from_dict(default, path, "default_model"),
             models=models,
-            context=_as_dict(raw.get("context", {}), "context", path),
-            workflow=_as_dict(raw.get("workflow", {}), "workflow", path),
-            history=_as_dict(raw.get("history", {}), "history", path),
-            auto_accept=_as_bool(raw.get("auto_accept", False), "auto_accept", path),
+            context=_as_dict(merged.get("context", {}), "context", path),
+            workflow=_as_dict(merged.get("workflow", {}), "workflow", path),
+            history=_as_dict(merged.get("history", {}), "history", path),
+            auto_accept=_as_bool(merged.get("auto_accept", False), "auto_accept", path),
             path=path,
         )
 
@@ -233,14 +234,26 @@ class Settings:
 
     @classmethod
     def _convert_value(cls, field_path: str, value: str, typ: type, path: Path) -> Any:
+        """CLI 入口的宽松转换(字符串 → 目标类型)。JSON load 的严格校验走 _as_*。"""
         if typ is str:
             return str(value)
         if typ is float:
-            return _as_float(value, field_path, path)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                raise ConfigError(f"'{field_path}' 需要是数字, 实际: {value!r}", path=path)
         if typ is int:
-            return _as_int(value, field_path, path)
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                raise ConfigError(f"'{field_path}' 需要是整数, 实际: {value!r}", path=path)
         if typ is bool:
-            return _as_bool(value, field_path, path)
+            v = str(value).strip().lower()
+            if v in ("true", "1", "yes", "on"):
+                return True
+            if v in ("false", "0", "no", "off"):
+                return False
+            raise ConfigError(f"'{field_path}' 需要是布尔值(true/false), 实际: {value!r}", path=path)
         raise ConfigError(f"不支持的类型: {typ}", path=path)
 
     def set_value(self, dotted_key: str, value: Any) -> None:

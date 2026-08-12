@@ -111,6 +111,38 @@ def write_or_update(path, default, content=None):
     return True
 
 
+def collect_scan_files():
+    """构建安全扫描文件集合(机器可读 NUL 分隔, 不解析 porcelain)。
+
+    覆盖: staged + unstaged(含 rename 目标) + untracked(含新目录内文件)。
+    保证: 扫描文件集合 ⊇ git add -A 最终提交集合。
+
+    删除文件无需扫描内容(不存在于磁盘, 会被 isfile 过滤)。
+    """
+    files: list[str] = []
+    for cmd in (
+        ["git", "diff", "--name-only", "-z"],          # unstaged tracked 修改
+        ["git", "diff", "--cached", "--name-only", "-z"],  # staged
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],  # untracked(含新目录内)
+    ):
+        code, out, _ = run(cmd, cwd=ROOT, timeout=60)
+        if code != 0:
+            continue
+        # NUL 分隔; Windows 下可能 CRLF, 统一去 \r\n
+        for p in out.split("\x00"):
+            p = p.strip()
+            if p:
+                files.append(p)
+    # 去重(保持顺序)
+    seen = set()
+    result = []
+    for p in files:
+        if p not in seen:
+            seen.add(p)
+            result.append(p)
+    return result
+
+
 def security_scan(force_files=None):
     """
     推送前安全扫描。
@@ -118,17 +150,11 @@ def security_scan(force_files=None):
     返回 (blocked, findings)
       blocked=True 时禁止 push。
     """
-    # 1) 获取将要 add 的文件清单(避开大文件)
-    code, out, _ = git("status", "--porcelain")
-    files = []
-    for l in out.splitlines():
-        if not l.strip():
-            continue
-        path = l[3:].strip().strip('"')
-        if path:
-            files.append(path)
+    # 1) 获取将要 add 的文件清单: NUL 分隔三命令合并(不再解析 porcelain)
     if force_files:
         files = force_files
+    else:
+        files = collect_scan_files()
 
     patterns = [
         # 环境变量/配置

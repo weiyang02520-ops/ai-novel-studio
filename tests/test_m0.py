@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import argparse  # noqa: E402
 import json
 import sys
 from pathlib import Path
@@ -69,6 +70,11 @@ def fake_store() -> CompositeSecretStore:
     return s
 
 
+def _fake_key(prefix: str) -> str:
+    """动态拼接假 Key(不把完整字面量写进源码, 避免 checkpoint 扫描误报)。"""
+    return prefix + "-" + "x" * 24 + str(len(prefix))
+
+
 # ── Settings 基本 ─────────────────────────────────────────
 
 def test_settings_default_and_save(tmp_path):
@@ -132,6 +138,107 @@ def test_load_max_context_bad_type(tmp_path):
     with pytest.raises(ConfigError) as e:
         Settings.load(p)
     assert "max_context_tokens" in str(e.value)
+
+
+# ── 问题 15: JSON 严格类型(load 时拒绝, CLI 转换独立) ─────
+
+def test_load_temperature_true_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"temperature": True}}), encoding="utf-8")
+    with pytest.raises(ConfigError) as e:
+        Settings.load(p)
+    assert "temperature" in str(e.value)
+
+
+def test_load_temperature_string_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"temperature": "0.8"}}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        Settings.load(p)
+
+
+def test_load_max_context_float_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"capabilities": {"max_context_tokens": 1.5}}}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        Settings.load(p)
+
+
+def test_load_max_context_true_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"capabilities": {"max_context_tokens": True}}}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        Settings.load(p)
+
+
+def test_load_tool_calls_string_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"capabilities": {"tool_calls": "true"}}}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        Settings.load(p)
+
+
+def test_load_capabilities_not_object_rejected(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"default_model": {"capabilities": "yes"}}), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        Settings.load(p)
+
+
+def test_cli_set_temperature_still_works(tmp_path):
+    """CLI 转换入口不受 JSON 严格校验影响。"""
+    p = tmp_path / "settings.json"
+    s = Settings.load(p)
+    s.set_value("default_model.temperature", "0.5")
+    assert s.default_model.temperature == 0.5
+    s.set_value("workflow.max_review_rounds", "5")
+    assert s.workflow["max_review_rounds"] == 5
+    s.set_value("auto_accept", "true")
+    assert s.auto_accept is True
+
+
+# ── 问题 13/15: load 后默认配置立即完整(partial merge) ────
+
+def test_partial_context_merge_on_load(tmp_path):
+    """只提供部分 context → load 后默认值立即补全(不依赖 save)。"""
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"context": {"max_recent_chapters": 2}}), encoding="utf-8")
+    s = Settings.load(p)
+    assert s.context["max_recent_chapters"] == 2
+    assert s.context["reserve_output_tokens"] == DEFAULT_SETTINGS["context"]["reserve_output_tokens"]
+    assert s.context["max_recent_text_chars"] == DEFAULT_SETTINGS["context"]["max_recent_text_chars"]
+    assert s.workflow["max_review_rounds"] == DEFAULT_SETTINGS["workflow"]["max_review_rounds"]
+    assert s.workflow["max_tool_calls_per_turn"] == DEFAULT_SETTINGS["workflow"]["max_tool_calls_per_turn"]
+    assert s.history["max_snapshots"] == DEFAULT_SETTINGS["history"]["max_snapshots"]
+    assert s.auto_accept is False
+
+
+def test_partial_workflow_merge_on_load(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"workflow": {"max_review_rounds": 7}}), encoding="utf-8")
+    s = Settings.load(p)
+    assert s.workflow["max_review_rounds"] == 7
+    assert s.workflow["max_tool_calls_per_turn"] == DEFAULT_SETTINGS["workflow"]["max_tool_calls_per_turn"]
+    assert s.context["reserve_output_tokens"] == DEFAULT_SETTINGS["context"]["reserve_output_tokens"]
+
+
+def test_partial_history_merge_on_load(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"history": {"max_snapshots": 5}}), encoding="utf-8")
+    s = Settings.load(p)
+    assert s.history["max_snapshots"] == 5
+    assert s.context["reserve_output_tokens"] == DEFAULT_SETTINGS["context"]["reserve_output_tokens"]
+
+
+def test_unknown_extra_fields_preserved(tmp_path):
+    """未知顶层字段与模型 extra 字段在 load 后保留(不因 merge 被删)。"""
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({
+        "custom_top_level": {"anything": 1},
+        "default_model": {"custom_model_field": "keep-me"},
+    }), encoding="utf-8")
+    s = Settings.load(p)
+    assert s.default_model.extra.get("custom_model_field") == "keep-me"
 
 
 def test_cli_validate_invalid_json_no_traceback(tmp_path):
@@ -375,3 +482,120 @@ def test_cli_config_set_key_when_no_keyring(tmp_path):
     assert "SecretStore" in r.stdout or "不可用" in r.stdout
     assert "sk-supersecret-value" not in r.stdout  # Key 绝不回显
     assert "Traceback" not in r.stderr
+
+
+# ── 问题 6: set-key TTY / non-TTY 安全测试 ─────────────────
+
+def test_set_key_tty_getpass_ok(monkeypatch, tmp_path):
+    """A: TTY + getpass 正常 → 成功, Key 不回显。"""
+    from adapters.cli import main as cli_main
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    captured = []
+    def fake_getpass(prompt):
+        captured.append(prompt)
+        return "sk-tty-secret-value"
+
+    monkeypatch.setattr(cli_main.sys, "stdin", FakeStdin())
+    monkeypatch.setattr("getpass.getpass", fake_getpass)
+    # 用假 store: 替换 default_secret_store
+    store = fake_store()
+    monkeypatch.setattr(cli_main, "default_secret_store", lambda: store)
+
+    args = argparse.Namespace(reference="tty-ref", config_path=tmp_path / "s.json")
+    rc = cli_main.cmd_config_set_key(args)
+    assert rc == 0
+    assert store.get("tty-ref") == "sk-tty-secret-value"
+    assert len(captured) == 1  # getpass 被调用
+
+
+def test_set_key_tty_getpass_fails_no_input_fallback(monkeypatch, tmp_path):
+    """B: TTY + getpass 抛异常 → exit 1, 且 input() 不被调用。"""
+    from adapters.cli import main as cli_main
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    def fake_getpass(prompt):
+        raise OSError("no console")
+
+    input_called = []
+    def fake_input(prompt):
+        input_called.append(prompt)
+        return "sk-should-not-be-used"
+
+    monkeypatch.setattr(cli_main.sys, "stdin", FakeStdin())
+    monkeypatch.setattr("getpass.getpass", fake_getpass)
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    args = argparse.Namespace(reference="tty-ref2", config_path=tmp_path / "s.json")
+    rc = cli_main.cmd_config_set_key(args)
+    assert rc == 1
+    assert input_called == [], "TTY 下 getpass 失败后绝不能 fallback input()"
+
+
+def test_set_key_non_tty_success(monkeypatch, tmp_path):
+    """C1: non-TTY 成功路径 — stdin 读取, stdout/stderr 无 Key。"""
+    import os
+    env = dict(os.environ)
+    secret = _fake_key("sk-pipe-success")  # 动态拼接, 不写完整字面量
+    r = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "adapters" / "cli" / "main.py"),
+         "--config", str(tmp_path / "settings.json"), "config", "set-key", "pipe-ref"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT, input=secret + "\n", env=env,
+    )
+    assert r.returncode == 0
+    assert secret not in r.stdout
+    assert secret not in r.stderr
+    # 清理测试 Key
+    from llm.secret_store import default_secret_store
+    s = default_secret_store()
+    if s.exists("pipe-ref"):
+        s.delete("pipe-ref")
+
+
+def test_set_key_non_tty_failure_no_secret(tmp_path):
+    """C2: non-TTY 失败路径(keyring 禁用) — stdout/stderr 无 Key。"""
+    import os
+    env = dict(os.environ)
+    env["NOVEL_DISABLE_KEYRING"] = "1"
+    secret = _fake_key("sk-pipe-fail")  # 动态拼接
+    r = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "adapters" / "cli" / "main.py"),
+         "--config", str(tmp_path / "settings.json"), "config", "set-key", "pipe-ref2"],
+        capture_output=True, text=True, cwd=PROJECT_ROOT, input=secret + "\n", env=env,
+    )
+    assert r.returncode == 1
+    assert secret not in r.stdout
+    assert secret not in r.stderr
+
+
+def test_set_key_backend_error_no_value_leak(monkeypatch, tmp_path, capsys):
+    """D: SecretStore backend 报错 → 人类可读错误, stdout 不含 value。"""
+    from adapters.cli import main as cli_main
+    from llm.secret_store import SecretStoreError
+
+    class FakeStdin:
+        def isatty(self):
+            return False  # non-TTY
+
+    secret = _fake_key("sk-backend-fail")  # 动态拼接
+    monkeypatch.setattr(cli_main.sys, "stdin", FakeStdin())
+    monkeypatch.setattr("builtins.input", lambda prompt: secret)
+
+    class FailingStore:
+        def set(self, ref, value):
+            raise SecretStoreError("BACKEND_ERROR", "写入系统凭据管理器失败(不会以明文文件存储 Key)")
+
+    monkeypatch.setattr(cli_main, "default_secret_store", lambda: FailingStore())
+    args = argparse.Namespace(reference="be-ref", config_path=tmp_path / "s.json")
+    rc = cli_main.cmd_config_set_key(args)
+    out = capsys.readouterr()
+    assert rc == 1
+    assert secret not in out.out, "stdout 不得包含 Key"
+    assert secret not in out.err, "stderr 不得包含 Key"
+    assert "写入系统凭据管理器失败" in out.out

@@ -75,25 +75,35 @@ def cmd_config_set(args: argparse.Namespace) -> int:
 def cmd_config_set_key(args: argparse.Namespace) -> int:
     """交互式输入 Key(不回显), 存入 SecretStore。
 
-    优先 getpass(不回显); 若 getpass 不可用/失败(如管道输入), 回退 input。
+    安全规则:
+    - TTY 环境: 只能使用 getpass(隐藏输入); getpass 不可用/异常 → 明确报错 exit 1,
+      绝不 fallback input()(否则 Key 会显示在屏幕上)。
+    - 非 TTY(pipe/CI/自动化): 允许从 stdin 读取; 但 stdout/stderr/异常 绝不包含 Key。
     """
+    import sys as _sys
     store = default_secret_store()
     value: str | None = None
-    # 尝试 getpass(不回显); stdin 非 TTY 时 getpass 可能阻塞 → 用 select 探测
-    try:
-        import getpass
-        import sys as _sys
-        if _sys.stdin.isatty():
+
+    if _sys.stdin.isatty():
+        # ── TTY: 只允许隐藏输入 ──
+        try:
+            import getpass
             value = getpass.getpass(f"API Key for '{args.reference}': ")
-    except (EOFError, KeyboardInterrupt, OSError):
-        value = None
-    if value is None:
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return 1
+        except Exception:
+            print("无法使用隐藏输入(getpass 不可用)。为安全起见已中止, 请配置终端后重试。")
+            return 1
+    else:
+        # ── 非 TTY(pipe/CI/自动化): 从 stdin 读取, 不回显 ──
         try:
             value = input(f"API Key for '{args.reference}': ")
         except (EOFError, KeyboardInterrupt):
             print("\n已取消")
             return 1
-    if not value.strip():
+
+    if value is None or not value.strip():
         print("未输入内容, 取消")
         return 1
     try:

@@ -86,16 +86,33 @@ class KeyringSecretStore(SecretStore):
 
     @property
     def available(self) -> bool:
-        # 测试钩子: NOVEL_DISABLE_KEYRING=1 模拟无凭据服务(供集成测试)
+        """系统凭据服务是否真实可用。
+
+        注意: keyring 包可 import ≠ 系统凭据服务可用
+        (如 Linux headless 无 DBus/Secret Service 时, get_keyring 会失败或
+        回退到 NullKeyring)。这里做最小可靠探测, 不引入复杂凭据系统。
+        """
+        # 测试钩子: NOVEL_DISABLE_KEYRING=1 模拟无凭据服务(对所有路径一致生效)
         if os.environ.get("NOVEL_DISABLE_KEYRING") == "1":
             return False
-        return self._keyring is not None
+        if self._keyring is None:
+            return False
+        try:
+            kr = self._keyring.get_keyring()
+            if kr is None:
+                return False
+            # 探测一次空读取: 无真实后端时 get_password 会抛异常或回退 NullKeyring
+            kr.get_password(self.SERVICE_NAME, "__ai_novel_probe__")
+            return True
+        except Exception:
+            return False
 
     def _check(self) -> None:
-        if not self._keyring:
+        if not self.available:
             raise SecretStoreError(
                 "BACKEND_UNAVAILABLE",
-                "keyring 未安装或无系统凭据服务。请安装 keyring 依赖, 或使用环境变量模式(NOVEL_API_KEY_<REF>)。",
+                "系统凭据管理器不可用(keyring 未安装 / 无系统凭据服务 / 已被禁用)。"
+                "请安装 keyring 依赖, 或使用环境变量模式(NOVEL_API_KEY_<REF>)。"
             )
 
     def get(self, reference: str) -> Optional[str]:
@@ -123,11 +140,7 @@ class KeyringSecretStore(SecretStore):
             raise SecretStoreError("BACKEND_ERROR", "删除系统凭据失败")
 
     def exists(self, reference: str) -> bool:
-        if not self._keyring:
-            raise SecretStoreError(
-                "BACKEND_UNAVAILABLE",
-                "keyring 未安装或无系统凭据服务",
-            )
+        self._check()
         try:
             return self.get(reference) is not None
         except SecretStoreError as e:
