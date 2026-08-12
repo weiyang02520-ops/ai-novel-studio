@@ -118,10 +118,12 @@ def cmd_config_set_key(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ai-novel-studio",
-        description="个人版 AI 小说创作软件(M0)",
+        description="个人版 AI 小说创作软件",
     )
     p.add_argument("--config", dest="config_path", type=Path, default=DEFAULT_CONFIG_PATH,
                    help="settings.json 路径")
+    p.add_argument("--data-dir", dest="data_dir", type=Path, default=None,
+                   help="小说数据目录(默认 data/novels/, 测试用临时目录)")
     sub = p.add_subparsers(dest="command")
 
     cfg = sub.add_parser("config", help="配置管理")
@@ -134,6 +136,54 @@ def build_parser() -> argparse.ArgumentParser:
     setp.add_argument("value")
     setp2 = cfg_sub.add_parser("set-key", help="交互式设置 API Key 到 SecretStore(不回显)")
     setp2.add_argument("reference", help="secret_reference 名称, 如 deepseek-main")
+
+    # ── novel ──
+    novel = sub.add_parser("novel", help="小说项目管理")
+    novel_sub = novel.add_subparsers(dest="novel_command")
+    ncreate = novel_sub.add_parser("create", help="创建小说")
+    ncreate.add_argument("name", help="书名(可中文)")
+    ncreate.add_argument("--id", dest="id", help="显式 project_id([a-z][a-z0-9_-]{1,63})")
+    ncreate.add_argument("--genre", help="题材")
+    novel_sub.add_parser("list", help="列出全部小说")
+    nshow = novel_sub.add_parser("show", help="显示小说元数据")
+    nshow.add_argument("project_id")
+    nopen = novel_sub.add_parser("open", help="打开并验证项目(输出摘要)")
+    nopen.add_argument("project_id")
+    nval = novel_sub.add_parser("validate", help="项目一致性验证")
+    nval.add_argument("project_id")
+
+    # ── chapter ──
+    chapter = sub.add_parser("chapter", help="章节管理")
+    chapter_sub = chapter.add_subparsers(dest="chapter_command")
+    cwrite = chapter_sub.add_parser("write", help="创建草稿")
+    cwrite.add_argument("project_id")
+    cwrite.add_argument("chapter", type=int)
+    cwrite.add_argument("--title", default="")
+    cwrite.add_argument("--content", default=None)
+    cwrite.add_argument("--from-file")
+    clist = chapter_sub.add_parser("list", help="列出章节")
+    clist.add_argument("project_id")
+    cread = chapter_sub.add_parser("read", help="读取章节")
+    cread.add_argument("project_id")
+    cread.add_argument("chapter", type=int)
+    cread.add_argument("--draft", action="store_true", help="读草稿(默认读已确认)")
+    cupd = chapter_sub.add_parser("update", help="更新草稿")
+    cupd.add_argument("project_id")
+    cupd.add_argument("chapter", type=int)
+    cupd.add_argument("--title")
+    cupd.add_argument("--content")
+    cupd.add_argument("--from-file")
+    cconf = chapter_sub.add_parser("confirm", help="手动确认草稿(收编到 chapters/)")
+    cconf.add_argument("project_id")
+    cconf.add_argument("chapter", type=int)
+
+    # ── history ──
+    hist = sub.add_parser("history", help="历史快照与回滚")
+    hist_sub = hist.add_subparsers(dest="history_command")
+    hund = hist_sub.add_parser("undo-last", help="回滚最近一次快照")
+    hund.add_argument("project_id")
+    hlist = hist_sub.add_parser("list", help="列出历史记录")
+    hlist.add_argument("project_id")
 
     return p
 
@@ -157,6 +207,48 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config_set(args)
         if args.config_command == "set-key":
             return cmd_config_set_key(args)
+
+    # M1 命令(novel / chapter / history) — 懒加载避免 import 开销
+    import adapters.cli.commands as m1
+
+    if args.command == "novel":
+        if not getattr(args, "novel_command", None):
+            print("用法: ai-novel-studio novel {create|list|show|open|validate}")
+            return 0
+        if args.novel_command == "create":
+            return m1.cmd_novel_create(args)
+        if args.novel_command == "list":
+            return m1.cmd_novel_list(args)
+        if args.novel_command == "show":
+            return m1.cmd_novel_show(args)
+        if args.novel_command == "open":
+            return m1.cmd_novel_open(args)
+        if args.novel_command == "validate":
+            return m1.cmd_novel_validate(args)
+
+    if args.command == "chapter":
+        if not getattr(args, "chapter_command", None):
+            print("用法: ai-novel-studio chapter {write|list|read|update|confirm}")
+            return 0
+        if args.chapter_command == "write":
+            return m1.cmd_chapter_write(args)
+        if args.chapter_command == "list":
+            return m1.cmd_chapter_list(args)
+        if args.chapter_command == "read":
+            return m1.cmd_chapter_read(args)
+        if args.chapter_command == "update":
+            return m1.cmd_chapter_update(args)
+        if args.chapter_command == "confirm":
+            return m1.cmd_chapter_confirm(args)
+
+    if args.command == "history":
+        if not getattr(args, "history_command", None):
+            print("用法: ai-novel-studio history {undo-last|list}")
+            return 0
+        if args.history_command == "undo-last":
+            return m1.cmd_history_undo_last(args)
+        if args.history_command == "list":
+            return m1.cmd_history_list(args)
 
     print(f"未知命令: {args.command}")
     return 1

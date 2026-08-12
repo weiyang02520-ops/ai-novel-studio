@@ -5,13 +5,11 @@
 
 ## P0
 
-- [ ] 完成 M0 Final Gate Last Fix(4 项: Null/Fail backend 识别 / fail-closed 枚举 / NUL 路径保留 / chunk-boundary 扫描)
-- [ ] 等待 External ChatGPT final re-review(M0 FINAL Gate)
+- [ ] 等待 External ChatGPT M1 review(小说项目 + 章节数据闭环待审)
 
 ## P1
 
-- [ ] **M1: 新建小说、保存章节(手动 confirm 路径)** — `NOT AUTHORIZED YET`(仅 External ChatGPT 明确授权后才进入)
-- [ ] M2: 配置 API 并真实对话(config test-provider)
+- [ ] **M2: 配置 API 并真实对话(config test-provider)** — `NOT AUTHORIZED YET`(仅 External ChatGPT 明确授权后才进入)
 
 ## P2
 

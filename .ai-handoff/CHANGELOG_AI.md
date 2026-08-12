@@ -57,3 +57,24 @@
 - ` M tests/test_checkpoint.py`
 - ` M tests/test_m0.py`
 
+
+## 2026-08-12 13:29 — Checkpoint
+
+摘要: add 12 new files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M adapters/cli/main.py`
+- `?? README.md`
+- `?? adapters/cli/commands.py`
+- `?? core/chapter.py`
+- `?? core/history.py`
+- `?? core/project.py`
+- `?? core/storage.py`
+- `?? docs/`
+- `?? tests/test_chapter.py`
+- `?? tests/test_history.py`
+- `?? tests/test_m1_cli.py`
+- `?? tests/test_project.py`
+- `?? tests/test_storage.py`
+
