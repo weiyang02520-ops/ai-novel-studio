@@ -32,14 +32,16 @@ def cmd_config_validate(args: argparse.Namespace) -> int:
         print(f"  [ERROR] SecretStore 不可用: {e}")
         return 1
     print(f"配置: {args.config_path}")
-    if not issues:
+    errors = [i for i in issues if i.severity == "error"]
+    if not errors:
         print("✓ 配置有效(本地校验通过, 未联网)")
+        for i in issues:  # warning(如 keyless)仍需展示
+            print(f"  {i}")
         return 0
     for i in issues:
         print(f"  {i}")
-    errors = [i for i in issues if i.severity == "error"]
-    print(f"共 {len(issues)} 项(错误 {len(errors)} 项)")
-    return 1 if errors else 0
+    print(f"共 {len(issues)} 项(错误 {len(errors)} 项); 本地校验, 未联网")
+    return 1
 
 
 def cmd_config_show(args: argparse.Namespace) -> int:
@@ -48,17 +50,33 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     except ConfigError as e:
         print(e)
         return 1
-    print("default_model:")
-    print(f"  provider: {s.default_model.provider}")
-    print(f"  base_url: {s.default_model.base_url}")
-    print(f"  model: {s.default_model.model}")
-    print(f"  temperature: {s.default_model.temperature}")
-    print(f"  capabilities: tool_calls={s.default_model.tool_calls}, "
-          f"vision={s.default_model.vision}, max_context_tokens={s.default_model.max_context_tokens}")
-    print(f"  secret_reference: {s.default_model.secret_reference}")
+
+    def key_status(ref: str) -> str:
+        """Key 存在性(configured/missing/unknown)。绝不显示 Key 内容/长度。"""
+        if not ref:
+            return "n/a"
+        store = default_secret_store()
+        try:
+            return "configured" if store.exists(ref) else "missing"
+        except SecretStoreError as e:
+            return "unknown" if e.code == "BACKEND_UNAVAILABLE" else f"unknown({e.code})"
+
+    def show_model(label: str, cfg) -> None:
+        print(f"{label}:")
+        print(f"  provider: {cfg.provider}")
+        print(f"  base_url: {cfg.base_url}")
+        print(f"  model: {cfg.model}")
+        print(f"  temperature: {cfg.temperature}")
+        print(f"  capabilities: tool_calls={cfg.tool_calls}, "
+              f"vision={cfg.vision}, max_context_tokens={cfg.max_context_tokens}")
+        print(f"  secret_reference: {cfg.secret_reference}")
+        print(f"  key: {key_status(cfg.secret_reference)}")
+
+    show_model("default_model", s.default_model)
     for role, cfg in s.models.items():
-        print(f"models.{role}: provider={cfg.provider}, base_url={cfg.base_url}, model={cfg.model}")
-    print("(API Key 不显示; 存储于 SecretStore)")
+        show_model(f"models.{role}", cfg)
+    print("(API Key 内容/长度/前后缀不显示; 存储于 SecretStore)")
+    return 0
 
 
 def cmd_config_set(args: argparse.Namespace) -> int:
@@ -124,6 +142,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="settings.json 路径")
     p.add_argument("--data-dir", dest="data_dir", type=Path, default=None,
                    help="小说数据目录(默认 data/novels/, 测试用临时目录)")
+    p.add_argument("--usage-path", dest="usage_path", type=Path,
+                   default=PROJECT_ROOT / "data" / "logs" / "usage.jsonl",
+                   help="usage 记录文件(默认 data/logs/usage.jsonl, 测试用临时路径)")
     sub = p.add_subparsers(dest="command")
 
     cfg = sub.add_parser("config", help="配置管理")
@@ -136,6 +157,27 @@ def build_parser() -> argparse.ArgumentParser:
     setp.add_argument("value")
     setp2 = cfg_sub.add_parser("set-key", help="交互式设置 API Key 到 SecretStore(不回显)")
     setp2.add_argument("reference", help="secret_reference 名称, 如 deepseek-main")
+    tprov = cfg_sub.add_parser("test-provider", help="真实联网测试 Provider 连接(chat/completions)")
+    tprov.add_argument("--role", help="模型配置 profile(writer/reviewer...); 缺省 default_model")
+    dk = cfg_sub.add_parser("delete-key", help="从 SecretStore 删除 Key(不显示旧值)")
+    dk.add_argument("reference")
+    ks = cfg_sub.add_parser("key-status", help="查询 Key 是否已配置(不显示 Key)")
+    ks.add_argument("reference")
+
+    # ── chat ──
+    chat = sub.add_parser("chat", help="直接对话(Provider → 模型 → 文本)")
+    chat.add_argument("prompt", help="用户消息")
+    chat.add_argument("--role", help="模型配置 profile(writer/reviewer...); 缺省 default_model")
+    chat.add_argument("--system", help="system 消息(可选)")
+    chat.add_argument("--no-stream", action="store_true", help="非流式: 完整响应后一次打印")
+    chat.add_argument("--temperature", type=float, default=None, help="覆盖本次请求温度(不写入 settings.json)")
+
+    # ── usage ──
+    usage = sub.add_parser("usage", help="本地 usage 统计")
+    usage_sub = usage.add_subparsers(dest="usage_command")
+    usage_sub.add_parser("summary", help="汇总统计")
+    urec = usage_sub.add_parser("recent", help="最近记录")
+    urec.add_argument("--limit", type=int, default=10, help="条数(默认 10)")
 
     # ── novel ──
     novel = sub.add_parser("novel", help="小说项目管理")
@@ -189,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        # §63: 任何命令中的 Ctrl+C → 友好取消, 无 traceback
+        print("\n已取消", file=sys.stderr)
+        return 130
+
+
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if not args.command:
@@ -197,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "config":
         if not getattr(args, "config_command", None):
-            print("用法: ai-novel-studio config {validate|show|set|set-key}")
+            print("用法: ai-novel-studio config {validate|show|set|set-key|test-provider|delete-key|key-status}")
             return 0
         if args.config_command == "validate":
             return cmd_config_validate(args)
@@ -207,6 +258,29 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config_set(args)
         if args.config_command == "set-key":
             return cmd_config_set_key(args)
+        # M2 命令(config test-provider / delete-key / key-status) — 懒加载
+        import adapters.cli.m2 as m2
+        if args.config_command == "test-provider":
+            return m2.cmd_config_test_provider(args)
+        if args.config_command == "delete-key":
+            return m2.cmd_config_delete_key(args)
+        if args.config_command == "key-status":
+            return m2.cmd_config_key_status(args)
+
+    # M2 命令(chat / usage) — 懒加载
+    import adapters.cli.m2 as m2
+
+    if args.command == "chat":
+        return m2.cmd_chat(args)
+
+    if args.command == "usage":
+        if not getattr(args, "usage_command", None):
+            print("用法: ai-novel-studio usage {summary|recent}")
+            return 0
+        if args.usage_command == "summary":
+            return m2.cmd_usage_summary(args)
+        if args.usage_command == "recent":
+            return m2.cmd_usage_recent(args)
 
     # M1 命令(novel / chapter / history) — 懒加载避免 import 开销
     import adapters.cli.commands as m1

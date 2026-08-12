@@ -8,11 +8,12 @@
 
 - 管理多本小说的项目结构(大纲/人物/世界观/章节/记忆)
 - 章节本地持久化(纯 Markdown + JSON, 无数据库, 备份 = 拷贝目录)
-- 未来: 主编 → Writer → Reviewer 多 Agent 辅助创作(当前未实现 AI)
+- 直接对话: 支持符合 OpenAI Chat Completions 兼容接口的服务(OpenAI / DeepSeek / OpenRouter / Ollama 本地等)
+- 未来: 主编 → Writer → Reviewer 多 Agent 辅助创作(当前未实现 AI Agent)
 - 所有 AI 调用走你自己的 OpenAI 兼容 API(自定义 Base URL / API Key / Model)
 - 数据 100% 本地保存, 无云同步, 无账号系统
 
-> 当前状态: M1 完成 — 小说项目 + 章节数据闭环可用; AI Provider 尚未实现(M2)。
+> 当前状态: M2 完成 — Provider 链路 + 真实对话 + 流式输出 + usage 统计可用; Agent(M3+)未实现。
 
 ## 安装
 
@@ -61,13 +62,63 @@ python -m adapters.cli chapter read wanxiang-journey 1
 python -m adapters.cli history undo-last wanxiang-journey
 ```
 
-### 配置模型(M2 才可用)
+### 配置模型并对话(M2)
+
+支持**符合 OpenAI Chat Completions 兼容接口**的服务(兼容程度取决于服务实现)。
+以下是一个通用模板, 替换为你的服务参数即可:
 
 ```bash
-python -m adapters.cli config set default_model.base_url https://api.deepseek.com/v1
-python -m adapters.cli config set default_model.model deepseek-chat
-python -m adapters.cli config set-key deepseek-main   # 交互输入, 不回显
+# 1. 配置服务地址 / 模型 / 密钥引用(引用名可自定义)
+python -m adapters.cli config set default_model.base_url <BASE_URL>   # 例: https://api.deepseek.com/v1
+python -m adapters.cli config set default_model.model <MODEL>         # 例: deepseek-chat
+python -m adapters.cli config set default_model.secret_reference <REF> # 例: deepseek-main
+
+# 2. 设置 API Key(交互输入, 不回显; 存入系统凭据管理器, 绝不进 settings.json)
+python -m adapters.cli config set-key deepseek-main
+
+# 3. 本地校验(不联网)
 python -m adapters.cli config validate
+
+# 4. 真实联网测试 Provider 连接(最小请求)
+python -m adapters.cli config test-provider
+
+# 5. 直接对话(默认流式输出)
+python -m adapters.cli chat "你好, 简单介绍一下你自己"
+
+# 6. 查看用量
+python -m adapters.cli usage summary
+python -m adapters.cli usage recent
+```
+
+常用变体:
+
+```bash
+# 非流式(完整响应后一次打印)
+python -m adapters.cli chat "你好" --no-stream
+
+# 指定角色模型 profile(未配置时自动回退 default_model)
+python -m adapters.cli chat "你好" --role writer
+
+# 附加 system 消息
+python -m adapters.cli chat "你好" --system "你是一个简洁助手"
+
+# 仅覆盖本次请求的温度(不写入配置文件)
+python -m adapters.cli chat "你好" --temperature 0.2
+
+# 密钥管理(不显示 Key 内容)
+python -m adapters.cli config key-status deepseek-main
+python -m adapters.cli config delete-key deepseek-main
+```
+
+无鉴权本地服务(如 Ollama / 本地 OpenAI-compatible server): `secret_reference` 留空即可,
+请求不发送 Authorization 头(validate 会提示 keyless warning, 属预期)。
+
+### 角色模型 profile(可选)
+
+```bash
+python -m adapters.cli config set models.writer.base_url <BASE_URL>
+python -m adapters.cli config set models.writer.model <MODEL>
+python -m adapters.cli config set models.writer.secret_reference <REF>
 ```
 
 ## 数据在哪里
@@ -91,14 +142,16 @@ data/novels/<project_id>/
 ## API Key 安全原则
 
 - 真实 Key 只存系统凭据管理器(Windows Credential Manager / keyring), 环境变量为开发回退
-- `config/settings.json` 只存 `secret_reference`, 不含真实 Key
-- Key 绝不进入 Git / 日志 / 报错 / 交接文档
+- `config/settings.json` 只存 `secret_reference`, **不含真实 Key**
+- Key 绝不进入 Git / 日志 / 报错 / usage 记录 / 交接文档
+- 报错只显示安全摘要, 不 dump 原始响应体; TLS 校验默认开启
+- 不把 Key 放进 Base URL 查询参数(config validate 会拒绝)
 
 ## 当前尚未实现
 
-- AI Provider(模型调用)— M2
-- 主编/Writer/Reviewer Agent — M3+
+- 主编/Writer/Reviewer Agent(带工具执行)— M3+
 - 大纲/人物/世界观的 AI 辅助编辑
+- 聊天历史持久化 / 多轮会话(当前每轮独立请求)
 - 自动发布/手机端/会员 — 不在路线图
 
 ## 开发

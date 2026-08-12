@@ -105,3 +105,34 @@
 - ` M docs/context/AGENT_MEMORY.md`
 - `?? tests/test_transaction.py`
 
+
+## 2026-08-12 16:36 — Checkpoint
+
+摘要: add 18 new files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M README.md`
+- ` M adapters/cli/main.py`
+- ` M core/config.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M pyproject.toml`
+- `?? adapters/cli/m2.py`
+- `?? llm/factory.py`
+- `?? llm/openai_compatible.py`
+- `?? llm/provider.py`
+- `?? llm/testing.py`
+- `?? llm/transport.py`
+- `?? llm/types.py`
+- `?? llm/usage.py`
+- `?? scripts/m2_demo_mock.py`
+- `?? tests/conftest.py`
+- `?? tests/mock_server.py`
+- `?? tests/test_m2_cli.py`
+- `?? tests/test_m2_integration.py`
+- `?? tests/test_provider_errors.py`
+- `?? tests/test_provider_http.py`
+- `?? tests/test_provider_stream.py`
+- `?? tests/test_provider_types.py`
+- `?? tests/test_usage.py`
+

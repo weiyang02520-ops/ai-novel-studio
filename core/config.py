@@ -45,6 +45,10 @@ class ConfigError(Exception):
         super().__init__(prefix)
 
 
+# 支持的 Provider(M2 仅 openai_compatible; validate/test-provider 使用)
+SUPPORTED_PROVIDERS = {"openai_compatible"}
+
+
 def _as_float(value: Any, field_path: str, path: Path) -> float:
     """JSON load 严格类型: 只接受 number; 拒绝 bool(如 true → 1.0)与字符串。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -330,33 +334,51 @@ class ValidationIssue:
 
 
 _URL_RE = re.compile(r"^https?://", re.I)
+# §88: base_url 中带 Key 参数 → 拒绝(敏感)
+_SENSITIVE_QUERY_RE = re.compile(r"[?&](api_key|key|token)=", re.I)
 
 
 def validate_settings(s: Settings, secret_store: Any) -> list[ValidationIssue]:
-    """本地校验(不联网)。
+    """本地校验(绝不联网)。
 
     检查:
-      - Base URL 格式
+      - provider 是否支持
+      - Base URL 格式 + 不含 Key 参数
       - model 是否存在
-      - secret_reference 是否存在(或为空时允许无 Key 场景)
-      - SecretStore 能否找到 Key(仅存在性)
+      - secret_reference 是否存在(或为空时允许无 Key 场景 + warning)
+      - SecretStore 能否找到 Key(仅存在性, 不联网)
     返回 issues 列表(空 = 通过)。
     """
     issues: list[ValidationIssue] = []
 
     def check_model(label: str, cfg: ModelConfig) -> None:
+        if cfg.provider not in SUPPORTED_PROVIDERS:
+            issues.append(ValidationIssue(
+                "error", f"{label}: 不支持的 provider: {cfg.provider!r}(支持: {sorted(SUPPORTED_PROVIDERS)})"))
         if not cfg.base_url:
             issues.append(ValidationIssue("error", f"{label}: base_url 为空"))
         elif not _URL_RE.match(cfg.base_url):
             issues.append(ValidationIssue("error", f"{label}: base_url 不是合法 http(s) URL: {cfg.base_url[:40]}"))
+        elif _SENSITIVE_QUERY_RE.search(cfg.base_url):
+            issues.append(ValidationIssue(
+                "error", f"{label}: base_url 不应包含 API Key 参数(api_key/key/token)。Key 请存入 SecretStore(config set-key)。"))
         if not cfg.model:
             issues.append(ValidationIssue("error", f"{label}: model 为空"))
         if cfg.secret_reference:
             if secret_store is None:
                 issues.append(ValidationIssue("warning", f"{label}: secret_reference 存在但 SecretStore 不可用"))
-            elif not secret_store.exists(cfg.secret_reference):
-                issues.append(ValidationIssue("error", f"{label}: secret_reference '{cfg.secret_reference}' 在 SecretStore 中找不到 Key"))
-        # secret_reference 为空 = 允许(本地 Ollama 等无 Key 场景)
+            else:
+                try:
+                    if not secret_store.exists(cfg.secret_reference):
+                        issues.append(ValidationIssue(
+                            "error", f"{label}: secret_reference '{cfg.secret_reference}' 在 SecretStore 中找不到 Key"))
+                except Exception:
+                    issues.append(ValidationIssue(
+                        "warning", f"{label}: 无法查询 SecretStore(Key 存在性未知)"))
+        else:
+            # secret_reference 为空 = 允许(本地 Ollama 等无 Key 场景), 但给 warning(§51)
+            issues.append(ValidationIssue(
+                "warning", f"{label}: 未配置 secret_reference, 将按无鉴权 Keyless Provider 使用。"))
 
     check_model("default_model", s.default_model)
     for role, cfg in s.models.items():

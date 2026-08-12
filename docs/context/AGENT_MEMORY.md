@@ -71,3 +71,16 @@ ai-novel-studio/
 - frontmatter: characters 用 JSON 表示(list[str] 严格); 标量值含 CR/LF 拒绝(Core 写出的必须能读回)
 - update guards: reviewing/ready 拒绝; origin=ai 拒绝(manual 入口不绕过 AI 边界); user_confirmed 更新后回 draft
 - 不引入 SQLite/WAL/Event Sourcing/事务框架/第三方依赖; 全部 stdlib + 小型文件 transaction helper
+
+## M2 Provider 稳定规则(稳定)
+- **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)
+- **OpenAI-compatible first**: 只实现 openai_compatible; 未知 provider → UNSUPPORTED_PROVIDER(不偷偷兼容); 不绑定厂商 SDK(仅 httpx 通用 HTTP)
+- **内部模型**: ChatResult 不携带裸 HTTP response; ToolCall.arguments_json 保留 JSON 字符串(M2 不执行); Usage.estimated_usage 标记 estimated
+- **SecretStore only**: Key 只经 secret_store.get(reference); KEY_NOT_FOUND → KEY_NOT_CONFIGURED("API Key 尚未配置"); keyring 不可用 → 明确报错, 不 fallback 明文
+- **safe errors**: ProviderError 统一错误码; message 安全(Key/URL query/raw body 绝不进入); 服务端错误体回显 Key → 替换 [REDACTED]; HTML/超长 body 截断, 不 dump
+- **retry boundary**: 仅网络/timeout/5xx 最多重试 1 次(总尝试 ≤ 2); 400/401/403/404/429 不重试; 流式已产出任何 token → 不从头重试(STREAM_INTERRUPTED, 部分内容保留)
+- **usage 隐私**: usage.jsonl 只记 metadata(tokens/model/duration), 绝不记 prompt/response/Key; 坏行跳过+warning(派生数据 ≠ history 严格性); usage 写失败不影响聊天成功
+- **config validate 离线**: 绝不联网; test-provider 才真联网(最小 chat/completions 请求, 不 GET /models)
+- **URL 安全**: 仅 http(s); 末尾 / 不产生 //; 已填完整 /chat/completions 原样使用; base_url 带 api_key=/key=/token= → validate error; follow_redirects=False 防跨 host 泄漏 Authorization
+- **流式**: SSE 逐行(data: 前缀/忽略空行注释/[DONE]); delta.content → text chunk; tool_calls 按 index 聚合; finish_reason 未知不崩溃; usage 可选, 缺失 → estimated
+- **keyless**: secret_reference 空 → 不发送 Authorization(本地 Ollama); validate 给 warning 不 error

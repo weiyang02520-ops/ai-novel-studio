@@ -10,61 +10,86 @@
 
 ## 2. 当前阶段
 
-**M1 TRANSACTION CLOSEOUT complete. Awaiting External ChatGPT final review.**
-(M1 Gate 未授权; M2 NOT AUTHORIZED。)
+**M2 implementation complete. Awaiting External ChatGPT M2 review.**
+(M2 未宣布 PASS; M3 NOT AUTHORIZED。)
 
 ## 3. 本轮完成内容
 
-- **M1 TRANSACTION CLOSEOUT BATCH**(External ChatGPT CHANGES_REQUESTED 修复):
-  1. **undo_last 真正 all-or-nothing**: preflight 一次性验证整个 changes(路径安全/previous/backup 存在可读/project.json backup 可解析)→ 保存 undo 前状态(仅本次文件)→ 应用 restore → 中途失败自动回滚到 undo 前字节状态 → 全部成功后才同步 Project.metadata + 移除 index record(deep equality 匹配防重复 seq 误删)。
-  2. **confirm 无幽灵 history**: 新 Snapshot API(prepare/commit/discard/restore)— 先 prepare(backups 就位, index 未写)→ 业务全成功后才 commit history; 失败 → restore 业务文件 + discard backups。update_draft 同样事务化。
-  3. **snapshot 半成品清理**: prepare 复制中途失败 → 已创建 backups 全部清理, index 无记录, 原文件不动, 后续 seq 不混乱。
-  4. **诚实报错**: rollback 成功 → "已恢复到确认前状态"; rollback 本身失败(restore 尽力恢复全部 target 后仍失败)→ 高严重度 "确认失败且自动恢复未完整完成, 请运行 novel validate", 不声称已回滚, 不泄漏底层细节(原异常在 __cause__)。
-  5. **history commit 失败一起回滚**: commit 原子写全量 index; commit 失败 → 业务文件一并恢复(无 history 的业务 commit 不发生)。
-  6. **undo 幂等**: previous=absent 且目标不存在 → 跳过(record 移除失败后可安全重试)。
-  7. **history list 显示 changes 摘要**(多文件显示 首target(+N))。
+- **M2 COMPLETE MEGA BATCH**(Provider + 真实 API + Streaming + Chat + Usage + Diagnostics):
+  1. **llm/ 模块**: types.py(内部统一模型 ChatMessage/ToolCall/Usage/ChatResult/ChatChunk)、provider.py(BaseProvider + 15 种错误码 + estimate_tokens)、transport.py(httpx 封装: connect/read 超时分离、follow_redirects=False、verify=True、SSEStream 异常包装)、openai_compatible.py(端点拼接/防 Key 查询参数/SecretStore 解析/非流式+SSE 解析/状态映射/重试)、factory.py(仅 openai_compatible, 未知 provider 拒绝)、usage.py(JSONL metadata-only)、testing.py(FakeProvider/FakeTransport 供 M3 复用)。
+  2. **错误映射**: 400(模型不存在/context 超长分类)/401/403/404/405(端点提示)/408(可重试)/409/422/429(Retry-After 提示)/5xx(可重试 1 次)/418 等未知 → HTTP_ERROR; HTML 错误页安全消息; body 截断 600 chars; 服务端回显 Key → [REDACTED]。
+  3. **重试边界**: 网络/timeout/5xx 最多 1 次(总 ≤2); 400/401/403/404/429 不重试; 流式已产出 → STREAM_INTERRUPTED 不从头重试。
+  4. **CLI**: config test-provider(--role, 真联网最小 chat/completions)/delete-key/key-status(不显示 Key)/config show 增强(key: configured/missing/unknown)/chat(--role/--system/--no-stream/--temperature 校验/默认流式/空输入拒绝/超长本地保护/Ctrl+C→130)/usage summary+recent; 全部无 traceback。
+  5. **usage**: data/logs/usage.jsonl(可注入路径), 只记 metadata, 坏行跳过+warning, 写失败不阻断聊天成功。
+  6. **依赖**: pyproject.toml 新增 httpx>=0.27(通用 HTTP: timeout/streaming/SSE/testability; 无厂商 SDK)。
+  7. **测试**: 新增 6 个文件 + local mock server(ThreadingHTTPServer, localhost): 单测(FakeTransport: 解析/状态/重试/泄漏)、集成(真实 HttpTransport→mock: non-stream/stream/auth/keyless/retry/interrupt)、CLI subprocess(全命令 + 全局 Secret 不泄漏断言)。
 
 ## 4. 本轮修改文件
 
 - `M .ai-handoff/NEXT_TASKS.md`
 - ` M .ai-handoff/PROJECT_STATE.md`
-- ` M adapters/cli/commands.py`
-- ` M core/chapter.py`
-- ` M core/history.py`
+- ` M README.md`
+- ` M adapters/cli/main.py`
+- ` M core/config.py`
 - ` M docs/context/AGENT_MEMORY.md`
-- `?? tests/test_transaction.py`
+- ` M pyproject.toml`
+- `?? adapters/cli/m2.py`
+- `?? llm/factory.py`
+- `?? llm/openai_compatible.py`
+- `?? llm/provider.py`
+- `?? llm/testing.py`
+- `?? llm/transport.py`
+- `?? llm/types.py`
+- `?? llm/usage.py`
+- `?? scripts/m2_demo_mock.py`
+- `?? tests/conftest.py`
+- `?? tests/mock_server.py`
+- `?? tests/test_m2_cli.py`
+- `?? tests/test_m2_integration.py`
+- `?? tests/test_provider_errors.py`
+- `?? tests/test_provider_http.py`
+- `?? tests/test_provider_stream.py`
+- `?? tests/test_provider_types.py`
+- `?? tests/test_usage.py`
 
 ## 5. 已验证结果
 
-- 单元测试 **176/176 PASS**(新增 14 个 closeout 测试: Case A 双 backup 缺失 0 修改 / Case B 中途写失败字节级回滚 / Case C unlink 失败回滚 / 成功 undo 完整断言(磁盘+内存+重启进程)/ 4 类失败 confirm 无历史无 orphan backup / snapshot 半成品清理+seq / update+confirm 的 history commit 失败回滚 / 诚实报错 2 例)。
-- Acceptance(真实 CLI 临时项目): A Normal Flow PASS / B Confirm+Undo+重启进程 PASS / C Undo Preflight Failure(删 backup→undo 失败 exit=1, 0 修改, validate PASS, record 未消耗)PASS / D Undo Mid-Apply Failure PASS(单元测试 Case B/C 字节级回滚; CLI 无法注入 os.replace)/ E Failed Confirm Cleanup PASS(拒绝路径 exit=1 无 traceback, history 无记录, 0 backup)/ F Snapshot Partial Failure Cleanup PASS(单元测试)/ G Restart/Reopen PASS / H novel validate PASS。
-- M0 regression: test_m0 + test_checkpoint **66/66 PASS**。
+- 单元测试 **314/314 PASS**(新增 138 个 M2 测试: types 13 / http 41 / stream 16 / errors 14 / usage 9 / 集成 13 / CLI 21 + 4 个既有修复回归)。
+- Acceptance(A-I, 真实 CLI + local mock): A test-provider 成功 PASS / B chat 流式拼接 AI Novel Studio PASS / C keyless 无 Authorization PASS / D 401 安全错误无 Key 无 traceback PASS / E 503→200 retry 请求数 2 PASS / F 429 请求数 1 PASS / G stream interrupt 部分保留不重试 PASS / H usage summary requests 正确 PASS / I validate 离线(httpx.Client monkeypatch 断言不联网)PASS。
+- Secret 安全: 全局泄漏断言(401/403/500/network/malformed/chat CLI/test-provider → stdout/stderr/exception/usage 文件/settings 均无 fake secret)PASS。
+- M0 regression: test_m0 + test_checkpoint **66/66 PASS**; M1 regression: novel/chapter/history/transaction 全部 PASS。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
 
 ## 6. 未验证内容
 
-- 联网测试(M2 config test-provider 才做)。
-- AI Provider / Agent(M2+/M3+)未实现。
+- 真实外部 Provider 成功调用(生产配置缺 secret_reference; 用户配置 Key 后可 test-provider 验证)。
+- AI Agent(Runtime/主编/Writer/Reviewer, M3+)未实现。
 
 ## 7. 当前架构
 
 ```
 ai-novel-studio/
 ├── core/          # Core Engine(无 UI 依赖)
-│   ├── config.py      # 配置系统
+│   ├── config.py      # 配置系统(SUPPORTED_PROVIDERS + 离线 validate)
 │   ├── storage.py     # 原子写 + 路径安全 + ProjectStore
 │   ├── project.py     # 项目 CRUD + 目录骨架 + ID 安全
 │   ├── chapter.py     # 章节 frontmatter + 状态机 + confirm
 │   └── history.py     # Snapshot(prepare/commit/discard/restore) + undo-last
-├── agents/        # (M3+)
-├── llm/           # secret_store.py(已实现); provider.py(M2+)
-├── tools/         # (M3+)
-├── adapters/cli/  # CLI(main.py + commands.py: novel/chapter/history)
-├── config/        # settings.json(非敏感)
-├── data/novels/   # 运行数据(不入 Git)
+├── llm/           # Provider 层(无 UI 依赖)
+│   ├── secret_store.py    # 密钥安全存储(已实现)
+│   ├── types.py           # 内部统一数据模型
+│   ├── provider.py        # BaseProvider + ProviderError(15 错误码)
+│   ├── transport.py       # httpx 封装(超时/SSE/安全默认)
+│   ├── openai_compatible.py # OpenAI Chat Completions 兼容 Provider
+│   ├── factory.py         # config + SecretStore → Provider
+│   ├── usage.py           # 本地 usage JSONL(metadata-only)
+│   └── testing.py         # FakeProvider/FakeTransport(M3 复用)
+├── adapters/cli/  # CLI(main.py + commands.py + m2.py)
+├── config/        # settings.json(非敏感; 用户运行状态, 不入 Git)
+├── data/          # 运行数据: novels/ + logs/usage.jsonl(不入 Git)
 ├── docs/context/  # 长期记忆
-├── tests/         # M0(66) + M1(96) + closeout(14)
-└── scripts/       # ai_checkpoint.py
+├── tests/         # M0(66) + M1(96+14) + M2(138)
+└── scripts/       # ai_checkpoint.py + m2_demo_mock.py(本地演示)
 ```
 
 ## 8. 当前已知问题
@@ -82,28 +107,33 @@ ai-novel-studio/
 - undo: preflight 全量验证 → capture 当前状态 → apply(幂等)→ 全成功才同步 metadata + 移除 record。
 - ProjectStore(root) 注入: 生产 data/novels/, 测试 tmp_path。
 - 中文名自动生成 novel-<hex> ID; 显示名保留原名。
-- M1 不做 AI(Provider/Agent 全部 M2+)。
+- M2 Provider 用最小结构: types/provider/transport/openai_compatible/factory/usage/testing(不搞十几层)。
+- HTTP 用 httpx(通用, 非厂商 SDK): 超时分离/SSE/testability; FakeTransport + localhost mock 保证可测。
+- usage 是可观测派生数据: 坏行跳过(与 history 严格一致性区分); 只记 metadata 不记内容。
+- chat 是临时单轮入口: 不持久化会话、不写小说数据(避免 M2/M3 边界混乱)。
 
 ## 10. 下一步建议
 
-- P0: 等待 External ChatGPT M1 final review(本轮 closeout)。
-- P1: M2(Provider + config test-provider)仅在明确授权后开始。
+- P0: 等待 External ChatGPT M2 review。
+- P1: M3(Agent Runtime + Chief Editor)仅在明确授权后开始。
 
 ## 11. 希望外部模型重点审查
 
-- undo all-or-nothing: preflight 失败 0 修改 / 应用中途失败自动回滚 / 成功后才同步 metadata+移除 record。
-- confirm 事务: 失败不留幽灵 history / 无 orphan backup / snapshot 半成品清理。
-- history commit 失败: 业务文件一起回滚(无 history 的业务 commit 不发生)。
-- 诚实报错: rollback 失败时不声称已回滚。
+- Provider 与 CLI 解耦: CLI 不接触 HTTP/SSE/JSON 细节; M3 Agent Runtime 可复用 BaseProvider + llm/types。
+- Key 安全: ProviderError/CLI/usage/settings 全路径不泄漏; 服务端回显 Key → [REDACTED]。
+- retry 边界: 网络/timeout/5xx ≤1 次; 401/429 不重试; 流式已产出不重试。
+- config validate 绝对离线; test-provider 真联网(最小 chat/completions)。
+- 错误映射完整性: 400 分类 / HTML / 截断 / 未知状态码。
+- M1 transaction 回归(undo all-or-nothing / confirm 无幽灵 history)。
 
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: 0ecae60cb966 ai-checkpoint: update 1 files
+- checkpoint_base_commit: 80253ae46585 ai-checkpoint: update 1 files
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): 0ecae60 2026-08-12 13:59:16 +0800
-- 时间: 2026-08-12 15:06
+- 最近 commit(本文件生成时): 80253ae 2026-08-12 15:06:35 +0800
+- 时间: 2026-08-12 16:36
 
 ## 13. Critical Files
 
@@ -111,9 +141,15 @@ ai-novel-studio/
 - core/project.py — 项目 CRUD/骨架/ID 安全
 - core/chapter.py — 章节状态机/frontmatter/confirm(事务化)
 - core/history.py — Snapshot API + undo-last(preflight/capture/apply)
-- adapters/cli/commands.py — novel/chapter/history 命令
-- tests/test_{project,chapter,storage,history,m1_cli,stabilization,transaction}.py
+- core/config.py — ModelConfig/Settings/离线 validate/SUPPORTED_PROVIDERS
+- llm/types.py — 内部统一数据模型(M3 依赖)
+- llm/openai_compatible.py — Provider(非流式/SSE/错误映射/重试)
+- llm/transport.py — httpx 封装
+- llm/usage.py — usage JSONL
+- adapters/cli/{main,m2,commands}.py — CLI 三块
+- tests/ — M0(66) + M1(110) + M2(138)
 
 ## 14. Recent Important Changes
 
-- M1 TRANSACTION CLOSEOUT: undo all-or-nothing + confirm 无幽灵 history + snapshot 半成品清理 + 诚实报错, 176/176 测试通过, Acceptance A-H 全 PASS(详见 last_round)。
+- M2 COMPLETE: Provider 链路(httpx transport→OpenAI-compatible→BaseProvider)+ chat 流式/非流式 + config test-provider/delete-key/key-status + usage + 错误映射/重试/Key 安全, 314/314 测试通过, Acceptance A-I PASS, REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG(详见 last_round)。
+- M1 TRANSACTION CLOSEOUT: undo all-or-nothing + confirm 无幽灵 history + snapshot 半成品清理 + 诚实报错, 176/176 测试通过, Acceptance A-H 全 PASS。

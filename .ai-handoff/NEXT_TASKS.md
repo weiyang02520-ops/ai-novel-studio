@@ -5,12 +5,12 @@
 
 ## P0
 
-- [ ] 等待 External ChatGPT M1 final review(M1 TRANSACTION CLOSEOUT 待审: commit 已推送)
+- [ ] 等待 External ChatGPT M2 review(M2 implementation complete; REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG)
 
 ## P1
 
-- [ ] **M2: 配置 API 并真实对话(config test-provider)** — `NOT AUTHORIZED YET`(仅 External ChatGPT 明确授权后才进入)
+- [ ] **M3: Agent Runtime + Chief Editor 主编** — `NOT AUTHORIZED YET`(仅 External ChatGPT 明确授权后才进入)
 
 ## P2
 
-- [ ] M3+: 主编聊天/工具系统 — `NOT AUTHORIZED YET`
+- [ ] M3+: Writer/Reviewer Agent + 工具系统 — `NOT AUTHORIZED YET`

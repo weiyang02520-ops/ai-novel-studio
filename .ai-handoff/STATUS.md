@@ -1,27 +1,28 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 15:06 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-12 16:36 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M1 TRANSACTION CLOSEOUT complete. Awaiting External ChatGPT final review.**
-(M1 Gate 未授权; M2 NOT AUTHORIZED。)
+**M2 implementation complete. Awaiting External ChatGPT M2 review.**
+(M2 未宣布 PASS; M3 NOT AUTHORIZED。)
 
 ## 本轮变更
 
-**update 1 files**(新增 1 / 修改 1 / 删除 0)
+**add 18 new files**(新增 18 / 修改 1 / 删除 0)
 
 ## 已验证内容
 
-- 单元测试 **176/176 PASS**(新增 14 个 closeout 测试: Case A 双 backup 缺失 0 修改 / Case B 中途写失败字节级回滚 / Case C unlink 失败回滚 / 成功 undo 完整断言(磁盘+内存+重启进程)/ 4 类失败 confirm 无历史无 orphan backup / snapshot 半成品清理+seq / update+confirm 的 history commit 失败回滚 / 诚实报错 2 例)。
-- Acceptance(真实 CLI 临时项目): A Normal Flow PASS / B Confirm+Undo+重启进程 PASS / C Undo Preflight Failure(删 backup→undo 失败 exit=1, 0 修改, validate PASS, record 未消耗)PASS / D Undo Mid-Apply Failure PASS(单元测试 Case B/C 字节级回滚; CLI 无法注入 os.replace)/ E Failed Confirm Cleanup PASS(拒绝路径 exit=1 无 traceback, history 无记录, 0 backup)/ F Snapshot Partial Failure Cleanup PASS(单元测试)/ G Restart/Reopen PASS / H novel validate PASS。
-- M0 regression: test_m0 + test_checkpoint **66/66 PASS**。
+- 单元测试 **314/314 PASS**(新增 138 个 M2 测试: types 13 / http 41 / stream 16 / errors 14 / usage 9 / 集成 13 / CLI 21 + 4 个既有修复回归)。
+- Acceptance(A-I, 真实 CLI + local mock): A test-provider 成功 PASS / B chat 流式拼接 AI Novel Studio PASS / C keyless 无 Authorization PASS / D 401 安全错误无 Key 无 traceback PASS / E 503→200 retry 请求数 2 PASS / F 429 请求数 1 PASS / G stream interrupt 部分保留不重试 PASS / H usage summary requests 正确 PASS / I validate 离线(httpx.Client monkeypatch 断言不联网)PASS。
+- Secret 安全: 全局泄漏断言(401/403/500/network/malformed/chat CLI/test-provider → stdout/stderr/exception/usage 文件/settings 均无 fake secret)PASS。
+- M0 regression: test_m0 + test_checkpoint **66/66 PASS**; M1 regression: novel/chapter/history/transaction 全部 PASS。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
 
 ## 未验证内容
 
-- 联网测试(M2 config test-provider 才做)。
-- AI Provider / Agent(M2+/M3+)未实现。
+- 真实外部 Provider 成功调用(生产配置缺 secret_reference; 用户配置 Key 后可 test-provider 验证)。
+- AI Agent(Runtime/主编/Writer/Reviewer, M3+)未实现。
 
 ## 已知问题
 
@@ -30,5 +31,5 @@
 
 ## 下一步
 
-- P0: 等待 External ChatGPT M1 final review(本轮 closeout)。
-- P1: M2(Provider + config test-provider)仅在明确授权后开始。
+- P0: 等待 External ChatGPT M2 review。
+- P1: M3(Agent Runtime + Chief Editor)仅在明确授权后开始。
