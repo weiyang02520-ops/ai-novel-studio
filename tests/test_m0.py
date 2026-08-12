@@ -392,6 +392,90 @@ def test_composite_write_without_keyring():
     assert e.value.code == "BACKEND_UNAVAILABLE"
 
 
+# ── M0 Final: 真实 Null/Fail backend 回归测试 ──────────────
+
+def _store_with_backend(backend_cls):
+    """构造 KeyringSecretStore, 其 get_keyring() 返回真实退化 backend。"""
+    import keyring as _kr
+    store = KeyringSecretStore()
+    real_backend = backend_cls()
+
+    class FakeModule:
+        core = _kr.core
+
+        def get_keyring(self):
+            return real_backend
+
+    store._keyring = FakeModule()
+    return store
+
+
+def test_null_backend_available_false():
+    from keyring.backends import null
+    store = _store_with_backend(null.Keyring)
+    assert store.available is False, "NullKeyring 必须判定为不可用(recommended=False)"
+
+
+def test_null_backend_all_ops_backend_unavailable():
+    from keyring.backends import null
+    store = _store_with_backend(null.Keyring)
+    for op in ("get", "set", "delete", "exists"):
+        with pytest.raises(SecretStoreError) as e:
+            if op == "get":
+                store.get("ref")
+            elif op == "set":
+                store.set("ref", "value")
+            elif op == "delete":
+                store.delete("ref")
+            else:
+                store.exists("ref")
+        assert e.value.code == "BACKEND_UNAVAILABLE", f"{op} 应返回 BACKEND_UNAVAILABLE"
+
+
+def test_fail_backend_available_false():
+    from keyring.backends import fail
+    store = _store_with_backend(fail.Keyring)
+    assert store.available is False, "FailKeyring 必须判定为不可用"
+
+
+def test_composite_set_null_backend_no_fake_success():
+    """CompositeSecretStore.set 在 Null backend 下绝不能假成功。"""
+    from keyring.backends import null
+    store = CompositeSecretStore()
+    store._keyring = _store_with_backend(null.Keyring)
+    with pytest.raises(SecretStoreError) as e:
+        store.set("ref", "sk-real-value-must-not-leak")
+    assert e.value.code == "BACKEND_UNAVAILABLE"
+    assert "sk-real-value-must-not-leak" not in str(e.value), "异常不得包含真实 value"
+
+
+def test_composite_set_null_backend_no_value_leak(capsys):
+    """Null backend 下 set 的 stdout/stderr 不含真实 value。"""
+    from keyring.backends import null
+    store = CompositeSecretStore()
+    store._keyring = _store_with_backend(null.Keyring)
+    try:
+        store.set("ref", "sk-value-leak-check-abc")
+    except SecretStoreError as e:
+        out = capsys.readouterr()
+        assert "sk-value-leak-check-abc" not in str(e)
+        assert "sk-value-leak-check-abc" not in out.out
+        assert "sk-value-leak-check-abc" not in out.err
+
+
+def test_real_windows_backend_still_available():
+    """正常后端(Windows Credential Manager)→ available=True(跳过不可用环境)。"""
+    import keyring as _kr
+    store = KeyringSecretStore()
+    if store.available:
+        # 真实后端存在时, get 不存在的 ref → KEY_NOT_FOUND(而不是 BACKEND_UNAVAILABLE)
+        try:
+            store.get("__definitely_not_exists__")
+            found = True
+        except SecretStoreError as e:
+            assert e.code == "KEY_NOT_FOUND", f"真实后端 get 未命中应为 KEY_NOT_FOUND, 实际 {e.code}"
+
+
 # ── CLI 冒烟 ───────────────────────────────────────────────
 
 import subprocess  # noqa: E402

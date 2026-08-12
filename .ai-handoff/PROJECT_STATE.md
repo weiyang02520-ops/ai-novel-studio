@@ -10,32 +10,28 @@
 
 ## phase
 
-**M0 Final External Review fixes completed. Awaiting External ChatGPT re-review.**
+**M0 final blocker fixes complete. Awaiting External ChatGPT final re-review.**
 (M0 FINAL Gate 未授权; M1 NOT AUTHORIZED。)
 
 ## last_round
 
-- 完成 M0 Final Review 的 7 项修复:
-  1. **checkpoint 安全扫描文件集合修复**: 弃用 porcelain 字符串解析, 改用 NUL-separated 三命令合并(git diff --name-only -z / git diff --cached --name-only -z / git ls-files --others --exclude-standard -z), 保证"扫描集合 ⊇ git add -A 提交集合"(修复: 新目录整体被 isfile 跳过但 add -A 会纳入)。
-  2. **checkpoint 生产测试**: 新增 tests/test_checkpoint.py(11 用例, 临时 git 仓库真实模拟): 新目录/嵌套/敏感路径/secret 内容/rename/空格/Unicode/高风险二进制/大文本后半段 secret/图片白名单/三种 Git 状态/删除文件。
-  3. **set-key TTY 安全**: TTY 环境只允许 getpass(隐藏输入), getpass 失败 → 明确报错 exit 1, 绝不 fallback input()(防 Key 显示在屏幕)。非 TTY(pipe/CI)允许 stdin 读取, stdout/stderr/异常不含 Key。
-  4. **SecretStore 错误语义**: keyring 包可 import ≠ 系统凭据服务可用(新增可用性探测: get_keyring + 空读探测, NullKeyring/异常 → BACKEND_UNAVAILABLE); NOVEL_DISABLE_KEYRING=1 对 get/set/delete/exists 全路径一致; 错误消息不携带原始异常/真实 Key。
-  5. **JSON 严格类型校验**(load 入口): temperature=true / temperature="0.8" / max_context_tokens=1.5 / max_context_tokens=true / tool_calls="true" / capabilities 非 object → ConfigError。CLI config set 的字符串转换独立保留(不同入口)。
-  6. **load 时默认配置立即完整**: _from_dict 先 deep-merge DEFAULT_SETTINGS, load 部分配置后立即得到完整默认结构(不再依赖 save 补齐); 未知扩展字段保留。
-  7. **交接文档修正**: NEXT_TASKS/PROJECT_STATE 反映真实 Gate 状态(不声称 PASS, 等待 External 复核)。
+- 完成 M0 Final Gate Last Fix 的 4 项修复:
+  1. **Null/Disabled keyring backend 正确识别(P0)**: `available` 改用官方 `keyring.core.recommended(backend)` 判定 — NullKeyring(禁用后端,get_password 静默返回 None 不抛异常)/FailKeyring(无可用后端)→ BACKEND_UNAVAILABLE;真实 Windows Credential Manager → available。不再用"get_password 没抛异常"判断。保留 NOVEL_DISABLE_KEYRING=1 测试钩子。
+  2. **checkpoint 文件枚举 fail-closed(P0)**: 任一枚举命令(git diff --name-only -z / git diff --cached --name-only -z / git ls-files --others --exclude-standard -z)失败 → 抛 ScanFileCollectionError → security_scan 返回 BLOCK(SCAN_ERROR), 绝不"忽略失败继续扫描再 git add -A"(无法证明扫描集合 ≥ 提交集合)。
+  3. **NUL 路径不 strip**: 新增专用 helper `run_nul()` — 直接读 bytes, 按 \\0 精确分割, 不做 strip/splitlines/quote 解析, 只去末尾空 segment。前导/尾随空格文件名精确保留。
+  4. **chunk-boundary 扫描修复**: 文本分块扫描加 128 字符 carry buffer, 覆盖跨 64KB 边界拼接才完整的 secret("sk-" 在块尾 + 剩余在块头)。"扫描完整文件"不仅是扫描每个孤立 chunk。
+- 新增测试: 真实 NullKeyring/FailKeyring 回归(available=False + get/set/delete/exists 全 BACKEND_UNAVAILABLE + Composite.set 不假成功 + value 不泄漏)、枚举失败 BLOCK、NUL 空格保留、跨块边界 secret BLOCK。
 
 ## verified
 
-- 单元测试 **57/57 PASS**(46 test_m0 + 11 test_checkpoint)。
-- checkpoint 文件集合: 新目录内嵌套文件/空格文件名/Unicode 文件名全部进入扫描集合(真实验证)。
-- CLI 全错误路径无 traceback: 非法 JSON/root list/models string/capabilities 非 object/temperature bool/max_context float/未知字段/敏感字段/非法 int/SecretStore unavailable — 全部人类可读 + exit 码合理。
-- SecretStore: NOVEL_DISABLE_KEYRING=1 时 get/set/delete/exists 一致返回 BACKEND_UNAVAILABLE(测试覆盖)。
-- Core/Adapter 边界静态检查: core/ llm/ tools/ agents/ 无 argparse/click/终端 IO/CLI 依赖/GUI 框架; SecretStore 无终端交互。
-- 依赖: 正式仅 keyring, dev 仅 pytest(未新增)。
+- 单元测试 **66/66 PASS**(52 test_m0 + 14 test_checkpoint)。
+- 真实 backend 探测: NullKeyring available=False / FailKeyring available=False / WinVault available=True / NOVEL_DISABLE_KEYRING=1 available=False(真实验证)。
+- checkpoint: 枚举失败 fail-closed(测试)、NUL 路径空格保留(测试)、跨块 secret 拦截(测试)。
+- CLI 全错误路径无 traceback(上轮验证仍有效)。
+- **Windows Credential Manager 真实读写(set/get/exists/delete, 假 Key 测后删除): REAL_ENV_CONFIRMED**(本轮与上轮均实际执行)。
 
 ## unverified
 
-- Windows Credential Manager 真实读写验证(本轮将执行, 见下文 REAL_ENV)。
 - 联网测试(M2 config test-provider 才做)。
 - M1+ 功能(项目/章节 CRUD)未实现。
 
@@ -74,22 +70,21 @@ ai-novel-studio/
 
 ## review_focus
 
-- 7 项修复是否全部落实(对应 last_round)。
-- checkpoint 文件集合是否满足"扫描集合 ⊇ 提交集合"(含 rename/新目录/空格/Unicode)。
-- set-key TTY 安全(无 fallback input)。
-- SecretStore 三错误码语义与 keyring 可用性探测。
-- JSON 严格类型与 CLI 转换分离是否完整。
-- load 时默认 merge 是否破坏未知扩展字段。
+- Null/Fail keyring backend 识别是否可靠(官方 recommended API)。
+- fail-closed 枚举(任何 Git 命令失败必须 BLOCK)。
+- NUL 路径精确保留(无 strip)。
+- chunk-boundary 跨块 secret 检测。
+- 上轮 7 项修复回归。
 
 ## critical_files
 
 - core/config.py — 配置系统(严格类型/load merge/白名单)
-- llm/secret_store.py — 密钥安全存储(三错误码/可用性探测)
+- llm/secret_store.py — 密钥安全存储(三错误码/recommended 探测)
 - adapters/cli/main.py — CLI 入口(TTY 安全 set-key, 无 traceback)
-- scripts/ai_checkpoint.py — 交接(NUL-separated 扫描集合)
-- tests/test_m0.py — 配置/SecretStore/CLI 测试(46)
-- tests/test_checkpoint.py — checkpoint 生产测试(11)
+- scripts/ai_checkpoint.py — 交接(fail-closed 枚举/NUL/carry buffer)
+- tests/test_m0.py — 配置/SecretStore/CLI 测试(52)
+- tests/test_checkpoint.py — checkpoint 生产测试(14)
 
 ## recent_changes
 
-- M0 Final Review 7 项修复全部完成, 57/57 测试通过(详见 last_round)。
+- M0 Final Gate Last Fix 4 项修复完成, 66/66 测试通过(详见 last_round)。

@@ -205,3 +205,60 @@ def test_deleted_file_skipped(tmp_path, monkeypatch):
 
     blocked, findings = ac.security_scan()  # 不应崩溃
     assert not blocked, f"删除文件不应触发扫描: {findings}"
+
+
+# ── M0 Final: 枚举失败必须 fail-closed ────────────────────
+
+def test_enumeration_failure_blocks(monkeypatch):
+    """任一 Git 枚举命令失败 → BLOCK(SCAN_ERROR), 不得继续。"""
+    import ai_checkpoint as ac_mod
+
+    def fake_run_nul(cmd, cwd=None, timeout=60):
+        if "ls-files" in cmd:
+            return 128, []  # 模拟 git ls-files 失败
+        return 0, ["safe.txt"]
+
+    monkeypatch.setattr(ac_mod, "run_nul", fake_run_nul)
+    blocked, findings = ac.security_scan()
+    assert blocked, "枚举失败必须 fail-closed"
+    assert any("SCAN_ERROR" in f["pattern"] or "fail-closed" in f["pattern"] or "枚举失败" in f["pattern"] for f in findings)
+
+
+def test_run_nul_preserves_leading_space(monkeypatch):
+    """run_nul 不得 strip 前导/尾随空格文件名。"""
+    import ai_checkpoint as ac_mod
+    import subprocess as sp
+    real_run = sp.run
+
+    def fake_run(cmd, cwd=None, capture_output=True, timeout=None):
+        class R:
+            returncode = 0
+            stdout = b" leading file.txt\x00trailing.txt \x00"
+            stderr = b""
+        return R()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    code, paths = ac_mod.run_nul(["git", "diff", "--name-only", "-z"])
+    assert paths == [" leading file.txt", "trailing.txt "], (
+        f"NUL 路径不得 strip, 实际: {paths!r}")
+    monkeypatch.setattr(sp, "run", real_run)
+
+
+# ── M0 Final: chunk-boundary secret ────────────────────────
+
+def test_chunk_boundary_secret_blocked(tmp_path, monkeypatch):
+    """假 secret 故意跨越 64KB chunk 边界 → 必须 BLOCK(carry buffer 覆盖)。"""
+    repo = make_repo(tmp_path, monkeypatch)
+    # 构造: chunk1 末尾几个字节 = "sk-", chunk2 开头 = 剩余假 key
+    # 64KB = 65536 字符; 让 "sk-" 恰好落在 65533-65535 位置
+    chunk_size = 64 * 1024
+    # 前缀填充到 chunk 边界前 3 个字符
+    prefix_len = chunk_size - 3
+    key_tail = "x" * 26  # 假 key 剩余部分(与 "sk-" 拼接后 28+ 字符)
+    content = "a" * prefix_len + "sk-" + key_tail + "\n"
+    assert len(content) > chunk_size, "内容必须跨块"
+    (repo / "boundary.txt").write_text(content, encoding="utf-8")
+
+    blocked, findings = ac.security_scan()
+    assert blocked, "跨 64KB chunk 边界的假 Key 必须被拦截(carry buffer)"
+    assert any("Key" in f["pattern"] for f in findings)

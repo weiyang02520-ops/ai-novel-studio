@@ -111,13 +111,43 @@ def write_or_update(path, default, content=None):
     return True
 
 
+class ScanFileCollectionError(Exception):
+    """扫描文件枚举失败(任何 Git 命令失败) — 必须 BLOCK, 不得继续。"""
+
+
+def run_nul(cmd, cwd=None, timeout=60):
+    """机器可读 NUL-separated 输出专用 helper。
+
+    直接读 bytes, 按 \\0 精确分割, 不做 strip/splitlines/quote 解析。
+    只去掉最终的空 segment(结尾 \\0 产生的空串)。
+    返回 (code, list[path])。
+    """
+    cwd = cwd or ROOT
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, []
+    except Exception:
+        return 127, []
+    if p.returncode != 0:
+        return p.returncode, []
+    data = p.stdout
+    parts = data.split(b"\x00")
+    # 去掉末尾空 segment(b'abc\0' → [b'abc', b''])
+    if parts and parts[-1] == b"":
+        parts = parts[:-1]
+    # 保留原始字节(不 strip), 仅解码; 无法解码的字节按 utf-8 errors=replace
+    return 0, [b.decode("utf-8", errors="replace") for b in parts if b != b""]
+
+
 def collect_scan_files():
     """构建安全扫描文件集合(机器可读 NUL 分隔, 不解析 porcelain)。
 
     覆盖: staged + unstaged(含 rename 目标) + untracked(含新目录内文件)。
     保证: 扫描文件集合 ⊇ git add -A 最终提交集合。
 
-    删除文件无需扫描内容(不存在于磁盘, 会被 isfile 过滤)。
+    Fail-closed: 任何枚举命令失败 → 抛 ScanFileCollectionError,
+    因为此时无法证明"扫描集合 >= 提交集合", 不得继续 checkpoint。
     """
     files: list[str] = []
     for cmd in (
@@ -125,14 +155,13 @@ def collect_scan_files():
         ["git", "diff", "--cached", "--name-only", "-z"],  # staged
         ["git", "ls-files", "--others", "--exclude-standard", "-z"],  # untracked(含新目录内)
     ):
-        code, out, _ = run(cmd, cwd=ROOT, timeout=60)
+        code, paths = run_nul(cmd)
         if code != 0:
-            continue
-        # NUL 分隔; Windows 下可能 CRLF, 统一去 \r\n
-        for p in out.split("\x00"):
-            p = p.strip()
-            if p:
-                files.append(p)
+            raise ScanFileCollectionError(
+                f"扫描文件枚举失败(fail-closed): `{' '.join(cmd)}` 退出码 {code}。"
+                "无法证明扫描集合覆盖全部提交文件, 已阻止 checkpoint。"
+            )
+        files.extend(paths)
     # 去重(保持顺序)
     seen = set()
     result = []
@@ -154,7 +183,14 @@ def security_scan(force_files=None):
     if force_files:
         files = force_files
     else:
-        files = collect_scan_files()
+        try:
+            files = collect_scan_files()
+        except ScanFileCollectionError as e:
+            return True, [{
+                "file": "(git 枚举失败)", "line": 0,
+                "pattern": "SCAN_ERROR",
+                "masked": str(e),
+            }]
 
     patterns = [
         # 环境变量/配置
@@ -243,16 +279,23 @@ def security_scan(force_files=None):
         # ── 文本内容扫描(分块, 全文件覆盖, 不只看前 512KB) ──
         try:
             with open(full, "r", encoding="utf-8", errors="replace") as f:
-                # 分块读取(64KB/块), 逐块匹配, 记录匹配行号
+                # 分块读取(64KB/块) + carry buffer(128 字符), 覆盖跨块边界 pattern
+                # (孤立块匹配会漏掉跨 64KB 边界拼接才完整的 secret, 如 "sk-" + 剩余部分)
+                CARRY = 128
+                prev_tail = ""
                 for chunk_start in range(0, size, 64 * 1024):
                     f.seek(chunk_start)
                     content = f.read(64 * 1024)
                     if not content:
                         break
+                    search_buf = prev_tail + content
+                    offset = len(prev_tail)
                     for pat, desc in patterns:
-                        m = re.search(pat, content)
-                        if m:
-                            line_no = content[: m.start()].count("\n") + 1
+                        m = re.search(pat, search_buf)
+                        # 只接受"延伸到新内容"的匹配(m.end() > offset);
+                        # 完全落在 carry 内的匹配上一块已处理过, 跳过避免重复
+                        if m and m.end() > offset:
+                            line_no = search_buf[: m.start()].count("\n") + 1
                             if chunk_start > 0:
                                 # 近似行号(分块边界), 标注"约"
                                 line_no = f"约{line_no}"
@@ -262,6 +305,7 @@ def security_scan(force_files=None):
                                 "file": path, "line": line_no, "pattern": desc, "masked": masked,
                             })
                             break  # 每文件每块最多记一条, 避免刷屏
+                    prev_tail = content[-CARRY:] if len(content) >= CARRY else content
         except (UnicodeDecodeError, OSError):
             # 无法按文本读取: 非白名单二进制且非高风险扩展 → 保守拦截
             if ext not in ALLOWED_BINARY_EXTS:

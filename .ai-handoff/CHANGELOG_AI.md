@@ -45,3 +45,15 @@
 - ` M tests/test_m0.py`
 - `?? tests/test_checkpoint.py`
 
+
+## 2026-08-12 13:07 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M llm/secret_store.py`
+- ` M scripts/ai_checkpoint.py`
+- ` M tests/test_checkpoint.py`
+- ` M tests/test_m0.py`
+

@@ -5,8 +5,8 @@
 
 ## P0
 
-- [ ] 完成 M0 Final External Review fixes(本轮的 7 项修复, 见 PROJECT_STATE last_round)
-- [ ] 等待 External ChatGPT re-review(M0 FINAL Gate)
+- [ ] 完成 M0 Final Gate Last Fix(4 项: Null/Fail backend 识别 / fail-closed 枚举 / NUL 路径保留 / chunk-boundary 扫描)
+- [ ] 等待 External ChatGPT final re-review(M0 FINAL Gate)
 
 ## P1
 

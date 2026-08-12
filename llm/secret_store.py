@@ -88,11 +88,14 @@ class KeyringSecretStore(SecretStore):
     def available(self) -> bool:
         """系统凭据服务是否真实可用。
 
-        注意: keyring 包可 import ≠ 系统凭据服务可用
-        (如 Linux headless 无 DBus/Secret Service 时, get_keyring 会失败或
-        回退到 NullKeyring)。这里做最小可靠探测, 不引入复杂凭据系统。
+        判定依据(官方 API, 非脆弱字符串判断):
+          - NOVEL_DISABLE_KEYRING=1(测试钩子)→ 不可用
+          - keyring 包未安装 → 不可用
+          - keyring.core.recommended(backend) == False →
+            NullKeyring(禁用后端)/ FailKeyring(无可用后端)等退化后端 → 不可用
+        注意: 不能用"get_password 没抛异常"判断可用 —
+        NullKeyring.get_password 静默返回 None 不会抛异常, 但实际不存储任何 Key。
         """
-        # 测试钩子: NOVEL_DISABLE_KEYRING=1 模拟无凭据服务(对所有路径一致生效)
         if os.environ.get("NOVEL_DISABLE_KEYRING") == "1":
             return False
         if self._keyring is None:
@@ -101,9 +104,8 @@ class KeyringSecretStore(SecretStore):
             kr = self._keyring.get_keyring()
             if kr is None:
                 return False
-            # 探测一次空读取: 无真实后端时 get_password 会抛异常或回退 NullKeyring
-            kr.get_password(self.SERVICE_NAME, "__ai_novel_probe__")
-            return True
+            # 官方推荐性判定: Null/Fail 等退化后端返回 False
+            return bool(self._keyring.core.recommended(kr))
         except Exception:
             return False
 
