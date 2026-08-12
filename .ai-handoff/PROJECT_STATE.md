@@ -10,26 +10,23 @@
 
 ## phase
 
-**M1 FINAL STABILIZATION complete. Awaiting External ChatGPT final review.**
+**M1 TRANSACTION CLOSEOUT complete. Awaiting External ChatGPT final review.**
 (M1 Gate 未授权; M2 NOT AUTHORIZED。)
 ## last_round
 
-- **M1 FINAL STABILIZATION BATCH**(数据一致性全面加固):
-  1. **confirm 文件事务化**: draft+confirmed+project.json+history 四文件操作; 任何一步失败 → 完整 rollback(恢复旧 project.json/draft、删除新建 confirmed、恢复内存 metadata); draft 删除失败 = confirm 整体失败(不留下双份)。
-  2. **history 完整 confirm undo**: 记录改为 changes 列表(project.json+draft+confirmed 三目标); undo-last 成组恢复(恢复 project.json/draft、删除 confirmed); 恢复后同步 Project 内存 metadata(不要求重开进程)。
-  3. **history 严格 schema**: 非空坏行 → DataIntegrityError(不 silent skip); seq/operation/timestamp/changes 校验; _next_seq 拒绝损坏 index(防重复 seq)。
-  4. **validate 跨文件检查**: duplicate(draft+confirmed 同编号)/ current_chapter==max(confirmed)/ 文件名-frontmatter 章节号一致。
-  5. **list 不隐藏冲突**: 同编号多条 → 全部返回 + conflict 标记 + CONFLICT 状态(CLI 显示 [冲突!])。
-  6. **metadata 严格类型**: current_chapter/current_volume/auto_accept/name/defaults 等驱动字段非法值(str/bool/float/负/null)→ DataIntegrityError, 不偷偷转换; property 直接返回。
-  7. **update guards**: reviewing/ready 拒绝更新; origin=ai 拒绝(M1 manual 入口不绕过 AI 边界); user_confirmed 更新后回 draft。
-  8. **frontmatter roundtrip**: characters 用 JSON 表示(list[str] 严格); title 含 CR/LF 拒绝(保证 Core 写出的数据 Core 能读回)。
+- **M1 TRANSACTION CLOSEOUT BATCH**(External ChatGPT CHANGES_REQUESTED 修复):
+  1. **undo_last 真正 all-or-nothing**: preflight 一次性验证整个 changes(路径安全/previous/backup 存在可读/project.json backup 可解析)→ 保存 undo 前状态(仅本次文件)→ 应用 restore → 中途失败自动回滚到 undo 前字节状态 → 全部成功后才同步 Project.metadata + 移除 index record(deep equality 匹配防重复 seq 误删)。
+  2. **confirm 无幽灵 history**: 新 Snapshot API(prepare/commit/discard/restore)— 先 prepare(backups 就位, index 未写)→ 业务全成功后才 commit history; 失败 → restore 业务文件 + discard backups。update_draft 同样事务化。
+  3. **snapshot 半成品清理**: prepare 复制中途失败 → 已创建 backups 全部清理, index 无记录, 原文件不动, 后续 seq 不混乱。
+  4. **诚实报错**: rollback 成功 → "已恢复到确认前状态"; rollback 本身失败(restore 尽力恢复全部 target 后仍失败)→ 高严重度 "确认失败且自动恢复未完整完成, 请运行 novel validate", 不声称已回滚, 不泄漏底层细节(原异常在 __cause__)。
+  5. **history commit 失败一起回滚**: commit 原子写全量 index; commit 失败 → 业务文件一并恢复(无 history 的业务 commit 不发生)。
+  6. **undo 幂等**: previous=absent 且目标不存在 → 跳过(record 移除失败后可安全重试)。
+  7. **history list 显示 changes 摘要**(多文件显示 首target(+N))。
 ## verified
 
-- 单元测试 **162/162 PASS**(含 32 个稳定化测试: 故障注入 A/B/C/D / 崩溃残留 / metadata 损坏 9 例 / history 损坏 / roundtrip / guards)。
-- Acceptance J(confirm undo): confirm→undo→重启进程→draft=v2/confirmed 无/current_chapter=0/validate PASS。
-- Acceptance K(失败 rollback): 4 类故障注入(写 confirmed/写 project.json/删 draft/history 快照失败)→ 磁盘恢复 confirm 前状态(单元测试断言)。
-- Acceptance L(跨文件): duplicate 检测 + list CONFLICT 显示 / metadata str 损坏报错 exit=1 无 traceback / current_chapter 不一致检测 — 全部 CLI 真实验证。
-- M1 正常路径回归(create→write→reopen→update→undo→confirm→reopen)保持 PASS。
+- 单元测试 **176/176 PASS**(新增 14 个 closeout 测试: Case A 双 backup 缺失 0 修改 / Case B 中途写失败字节级回滚 / Case C unlink 失败回滚 / 成功 undo 完整断言(磁盘+内存+重启进程)/ 4 类失败 confirm 无历史无 orphan backup / snapshot 半成品清理+seq / update+confirm 的 history commit 失败回滚 / 诚实报错 2 例)。
+- Acceptance(真实 CLI 临时项目): A Normal Flow PASS / B Confirm+Undo+重启进程 PASS / C Undo Preflight Failure(删 backup→undo 失败 exit=1, 0 修改, validate PASS, record 未消耗)PASS / D Undo Mid-Apply Failure PASS(单元测试 Case B/C 字节级回滚; CLI 无法注入 os.replace)/ E Failed Confirm Cleanup PASS(拒绝路径 exit=1 无 traceback, history 无记录, 0 backup)/ F Snapshot Partial Failure Cleanup PASS(单元测试)/ G Restart/Reopen PASS / H novel validate PASS。
+- M0 regression: test_m0 + test_checkpoint **66/66 PASS**。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
 ## unverified
 
@@ -45,7 +42,7 @@ ai-novel-studio/
 │   ├── storage.py     # 原子写 + 路径安全 + ProjectStore
 │   ├── project.py     # 项目 CRUD + 目录骨架 + ID 安全
 │   ├── chapter.py     # 章节 frontmatter + 状态机 + confirm
-│   └── history.py     # snapshot / undo-last
+│   └── history.py     # Snapshot(prepare/commit/discard/restore) + undo-last
 ├── agents/        # (M3+)
 ├── llm/           # secret_store.py(已实现); provider.py(M2+)
 ├── tools/         # (M3+)
@@ -53,7 +50,7 @@ ai-novel-studio/
 ├── config/        # settings.json(非敏感)
 ├── data/novels/   # 运行数据(不入 Git)
 ├── docs/context/  # 长期记忆
-├── tests/         # M0(66) + M1(62)
+├── tests/         # M0(66) + M1(96) + closeout(14)
 └── scripts/       # ai_checkpoint.py
 ```
 
@@ -68,33 +65,31 @@ ai-novel-studio/
 - 自研有限 frontmatter(不引入 YAML 依赖, 只解析/写出自己生成的格式, round-trip 稳定)。
 - 原子写: same-dir temp + flush + os.replace; 失败清理临时文件不破坏原文件。
 - 章节状态机手动路径: DRAFT → USER_CONFIRMED → CONFIRMED; current_chapter=max 推进不倒退。
-- .history: 对"已有内容修改"前快照(update/confirm 的 project.json); undo-last 顺序回滚。
+- history 事务: prepare(backups, 不写 index)→ 业务 → commit(业务成功后); 失败 → restore(尽力全部)+ discard; 不引入 SQLite/WAL/框架。
+- undo: preflight 全量验证 → capture 当前状态 → apply(幂等)→ 全成功才同步 metadata + 移除 record。
 - ProjectStore(root) 注入: 生产 data/novels/, 测试 tmp_path。
 - 中文名自动生成 novel-<hex> ID; 显示名保留原名。
 - M1 不做 AI(Provider/Agent 全部 M2+)。
 
 ## next_steps
 
-- P0: 等待 External ChatGPT M1 final review。
+- P0: 等待 External ChatGPT M1 final review(本轮 closeout)。
 - P1: M2(Provider + config test-provider)仅在明确授权后开始。
 ## review_focus
 
-- confirm 事务: 故障注入 rollback 是否完整(4 类)。
-- confirm undo: 成组恢复 + 内存同步 + 磁盘一致。
-- validate 跨文件: duplicate / current_chapter / filename 一致性。
-- metadata 严格类型: 所有损坏路径。
-- history 严格 schema: 坏行/坏 seq/backup 缺失。
-- frontmatter roundtrip: list + 换行拒绝。
-- update guards: 状态/origin。
+- undo all-or-nothing: preflight 失败 0 修改 / 应用中途失败自动回滚 / 成功后才同步 metadata+移除 record。
+- confirm 事务: 失败不留幽灵 history / 无 orphan backup / snapshot 半成品清理。
+- history commit 失败: 业务文件一起回滚(无 history 的业务 commit 不发生)。
+- 诚实报错: rollback 失败时不声称已回滚。
 ## critical_files
 
 - core/storage.py — 原子写/路径安全/ProjectStore
 - core/project.py — 项目 CRUD/骨架/ID 安全
-- core/chapter.py — 章节状态机/frontmatter/confirm
-- core/history.py — snapshot/undo
+- core/chapter.py — 章节状态机/frontmatter/confirm(事务化)
+- core/history.py — Snapshot API + undo-last(preflight/capture/apply)
 - adapters/cli/commands.py — novel/chapter/history 命令
-- tests/test_{project,chapter,storage,history,m1_cli}.py — M1 测试(62)
+- tests/test_{project,chapter,storage,history,m1_cli,stabilization,transaction}.py
 
 ## recent_changes
 
-- M1 FINAL STABILIZATION: confirm 事务化 + history 完整 undo + validate 跨文件 + metadata 严格 + guards + frontmatter roundtrip, 162/162 测试通过, Acceptance J/K/L 全 PASS(详见 last_round)。
+- M1 TRANSACTION CLOSEOUT: undo all-or-nothing + confirm 无幽灵 history + snapshot 半成品清理 + 诚实报错, 176/176 测试通过, Acceptance A-H 全 PASS(详见 last_round)。

@@ -2,9 +2,13 @@
 
 - .history/index.jsonl + 快照文件
 - 记录支持单文件(change 长度 1)与多文件(changes 列表, 如 confirm)
-- undo-last: 对整个 operation 成组恢复(无 partial rollback)
+- Snapshot: 先 prepare(backups 就位, index 未写)→ 业务操作 → commit;
+  业务失败 → restore(恢复业务文件) + discard(清理 backups)
+  = 失败的 operation 不出现在 undo history 中
+- undo-last: preflight 全量验证 → 保存 undo 前状态 → 应用 restore;
+  中途失败 → 自动回滚到 undo 前状态(真正 all-or-nothing)
 - 严格 schema 校验: 坏记录 → DataIntegrityError(不 silent skip)
-- undo 恢复 project.json 后同步 Project 内存 metadata
+- undo 成功后才移除 index record / 同步 Project 内存 metadata
 """
 from __future__ import annotations
 
@@ -98,47 +102,126 @@ def _backup_name(seq: int, target_rel: str) -> str:
     return f"{seq:05d}_{safe}.bak"
 
 
-def snapshot(project: Project, operation: str, target_rel: str) -> dict[str, Any]:
-    """单文件修改前快照(UPDATE: 复制旧内容; absent: 记录 previous=absent)。"""
-    return snapshot_multi(project, operation, [target_rel])
+class Snapshot:
+    """已准备但未提交的 history operation(backups 就位, index 未写)。
+
+    prepare → 业务操作 → commit / (restore + discard)
+    commit:   把 record 永久写入 index(原子写全量; 失败 → index 不变)
+    discard:  放弃本次 operation, 清理 backups(不写 index)
+    restore:  把业务文件恢复到快照时状态(业务失败回滚用)
+    """
+
+    def __init__(self, project: Project, seq: int, operation: str,
+                 changes: list[dict[str, Any]], backup_files: list[Path]):
+        self.project = project
+        self.seq = seq
+        self.operation = operation
+        self.changes = changes
+        self.backup_files = backup_files
+        self._timestamp = _now_iso()
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "seq": self.seq,
+            "operation": self.operation,
+            "timestamp": self._timestamp,
+            "changes": self.changes,
+        }
+
+    def commit(self) -> dict[str, Any]:
+        """把 record 永久写入 index(原子写全量)。失败 → StorageError, index 不变。"""
+        hdir = _history_dir(self.project)
+        hdir.mkdir(parents=True, exist_ok=True)
+        idx = hdir / INDEX_NAME
+        current = idx.read_text(encoding="utf-8") if idx.exists() else ""
+        atomic_write_text(idx, current + json.dumps(self.record(), ensure_ascii=False) + "\n")
+        return self.record()
+
+    def discard(self) -> None:
+        """放弃本次 operation: 清理备份文件(不写 index)。清理失败不掩盖主错误。"""
+        for b in self.backup_files:
+            try:
+                if b.exists():
+                    b.unlink()
+            except OSError:
+                pass
+
+    def restore(self) -> None:
+        """把业务文件恢复到快照时状态。
+
+        尽力恢复全部 target(单个失败不中断后续恢复); 任一失败 → StorageError。
+        调用方据此决定: 恢复完整 → discard; 不完整 → 保留 backups + 诚实报错。
+        """
+        failures: list[str] = []
+        for ch in self.changes:
+            try:
+                target = self.project.store.safe_path(self.project.id, ch["target"])
+                if ch["previous"] == "present":
+                    bpath = self.project.store.safe_path(self.project.id, ch["backup"])
+                    content = bpath.read_text(encoding="utf-8")
+                    atomic_write_text(target, content)
+                else:
+                    if target.exists():
+                        target.unlink()
+            except Exception as e:
+                failures.append(f"{ch['target']}: {e}")
+        if failures:
+            raise StorageError("恢复未完整完成: " + "; ".join(failures))
 
 
-def snapshot_multi(project: Project, operation: str, target_rels: list[str]) -> dict[str, Any]:
-    """多文件修改前快照(如 confirm): 对每个目标分别处理。
+def prepare_snapshot(project: Project, operation: str, target_rels: list[str]) -> Snapshot:
+    """准备快照: 复制全部 backups, 不写 index, 不修改业务文件。
 
-    返回记录 {seq, operation, timestamp, changes: [{target, previous, backup}]}。
+    复制中途失败 → 已创建的 backups 全部清理, 原文件不变, index 无记录。
+    seq 在 prepare 时分配; 失败后不产生孤儿 seq(index 未写)。
     """
     hdir = _history_dir(project)
     hdir.mkdir(parents=True, exist_ok=True)
     seq = _next_seq(project)
 
-    changes = []
-    for target_rel in target_rels:
-        target = project.store.safe_path(project.id, target_rel)
-        ch: dict[str, Any] = {"target": target_rel}
-        if target.exists():
-            backup = _backup_name(seq, target_rel)
+    changes: list[dict[str, Any]] = []
+    backup_files: list[Path] = []
+    try:
+        for target_rel in target_rels:
+            target = project.store.safe_path(project.id, target_rel)
+            ch: dict[str, Any] = {"target": target_rel}
+            if target.exists():
+                backup = _backup_name(seq, target_rel)
+                try:
+                    shutil.copy2(target, hdir / backup)
+                except OSError as e:
+                    raise StorageError(f"快照失败 {target_rel}: {e}")
+                ch["previous"] = "present"
+                ch["backup"] = f".history/{backup}"
+                backup_files.append(hdir / backup)
+            else:
+                ch["previous"] = "absent"
+                ch["backup"] = None
+            changes.append(ch)
+    except Exception:
+        # 半成品: 清理本次已创建的 backups(不写 index, 不影响已有历史)
+        for b in backup_files:
             try:
-                shutil.copy2(target, hdir / backup)
-            except OSError as e:
-                raise StorageError(f"快照失败 {target_rel}: {e}")
-            ch["previous"] = "present"
-            ch["backup"] = f".history/{backup}"
-        else:
-            ch["previous"] = "absent"
-            ch["backup"] = None
-        changes.append(ch)
+                if b.exists():
+                    b.unlink()
+            except OSError:
+                pass
+        raise
+    return Snapshot(project, seq, operation, changes, backup_files)
 
-    rec = {
-        "seq": seq,
-        "operation": operation,
-        "timestamp": _now_iso(),
-        "changes": changes,
-    }
-    idx = hdir / INDEX_NAME
-    with idx.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    return rec
+
+def snapshot(project: Project, operation: str, target_rel: str) -> dict[str, Any]:
+    """立即快照并记录(单文件, 兼容入口)。
+
+    业务方请用 prepare_snapshot + commit/restore/discard 做事务化调用。
+    """
+    return snapshot_multi(project, operation, [target_rel])
+
+
+def snapshot_multi(project: Project, operation: str, target_rels: list[str]) -> dict[str, Any]:
+    """立即快照并记录(多文件, 兼容入口)。"""
+    s = prepare_snapshot(project, operation, target_rels)
+    return s.commit()
 
 
 def list_history(project: Project) -> list[dict[str, Any]]:
@@ -146,13 +229,119 @@ def list_history(project: Project) -> list[dict[str, Any]]:
     return list(reversed(_read_records(project)))
 
 
-def undo_last(project: Project) -> dict[str, Any]:
-    """回滚最近一次快照(整个 operation 成组恢复, 无 partial)。
+def _preflight_undo(project: Project, changes: list[dict[str, Any]]) -> dict[str, Any]:
+    """undo 前一次性验证整个 changes 列表(§preflight)。
 
-    每个 change:
-      - previous=present: 用快照内容恢复目标
-      - previous=absent:  删除目标(若存在)
-    若目标含 project.json: 恢复后同步 Project.metadata(内存对象)。
+    任何问题(路径越界 / previous 非法 / backup 缺失 / 不可读 /
+    project.json backup 非合法 JSON)→ 抛错, 业务文件 0 修改。
+    返回 ready: {target_rel: (content, parsed_project_json|None) 或 None(absent)}
+    """
+    ready: dict[str, Any] = {}
+    for ch in changes:
+        target_rel = ch["target"]
+        project.store.safe_path(project.id, target_rel)  # 路径越界 → StorageError
+        if ch["previous"] not in VALID_PREVIOUS:
+            raise DataIntegrityError(f"history change previous 非法: {ch['previous']!r}(target={target_rel})")
+        if ch["previous"] == "present":
+            backup = ch.get("backup")
+            if not backup:
+                raise DataIntegrityError(f"history change present 但缺少 backup: {target_rel}")
+            bpath = project.store.safe_path(project.id, backup)  # backup 路径越界 → StorageError
+            if not bpath.exists():
+                raise StorageError(f"快照文件缺失: {backup}, 无法回滚")
+            try:
+                content = bpath.read_text(encoding="utf-8")
+            except OSError as e:
+                raise StorageError(f"快照文件不可读: {backup}: {e}")
+            if target_rel == "project.json":
+                try:
+                    parsed = json.loads(content)
+                except json.JSONDecodeError as e:
+                    raise DataIntegrityError(f"回滚 project.json 将写入损坏 JSON: {e.msg}")
+                if not isinstance(parsed, dict):
+                    raise DataIntegrityError("回滚后的 project.json 根节点不是对象")
+                ready[target_rel] = (content, parsed)
+            else:
+                ready[target_rel] = (content, None)
+        else:
+            ready[target_rel] = None
+    return ready
+
+
+def _capture_current_state(project: Project, changes: list[dict[str, Any]]) -> dict[str, Any]:
+    """记录 undo 开始前, 本次 changes 涉及文件的当前状态(供失败自动回滚)。"""
+    captured: dict[str, Any] = {}
+    for ch in changes:
+        target = project.store.safe_path(project.id, ch["target"])
+        if target.exists():
+            try:
+                captured[ch["target"]] = ("present", target.read_text(encoding="utf-8"))
+            except OSError as e:
+                raise StorageError(f"无法保存回滚前状态: {ch['target']}: {e}")
+        else:
+            captured[ch["target"]] = ("absent", None)
+    return captured
+
+
+def _apply_undo(project: Project, changes: list[dict[str, Any]], ready: dict[str, Any]) -> None:
+    """按 record 恢复目标文件(present → 写回快照内容; absent → 删除; 幂等)。"""
+    for ch in changes:
+        target = project.store.safe_path(project.id, ch["target"])
+        if ch["previous"] == "present":
+            content, _ = ready[ch["target"]]
+            atomic_write_text(target, content)
+        else:
+            if target.exists():
+                target.unlink()
+
+
+def _apply_captured(project: Project, captured: dict[str, Any]) -> None:
+    """把目标文件恢复到 undo 开始前状态(尽力恢复全部; 任一失败 → StorageError)。"""
+    failures: list[str] = []
+    for rel, (state, content) in captured.items():
+        try:
+            target = project.store.safe_path(project.id, rel)
+            if state == "present":
+                atomic_write_text(target, content)
+            else:
+                if target.exists():
+                    target.unlink()
+        except Exception as e:
+            failures.append(f"{rel}: {e}")
+    if failures:
+        raise StorageError("自动恢复未完整完成: " + "; ".join(failures))
+
+
+def _remove_record(project: Project, rec: dict[str, Any]) -> None:
+    """从 index 移除指定记录(deep equality 匹配, 防重复 seq 误删)。"""
+    idx = _history_dir(project) / INDEX_NAME
+    if not idx.exists():
+        return
+    try:
+        lines = idx.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        raise DataIntegrityError(f"无法读取 history index: {e}")
+    remaining: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            raise DataIntegrityError("history index 损坏, 无法移除回滚记录")
+        if r != rec:
+            remaining.append(line)
+    atomic_write_text(idx, "\n".join(remaining) + ("\n" if remaining else ""))
+
+
+def undo_last(project: Project) -> dict[str, Any]:
+    """回滚最近一次快照 — 真正 all-or-nothing。
+
+    1. preflight: 一次性验证整个 changes(任何问题 → 失败, 0 修改)
+    2. 保存 undo 前状态(仅本次涉及文件)
+    3. 应用 restore; 中途失败 → 自动回滚到 undo 前状态
+    4. 全部成功后才: 同步 Project.metadata(project.json 被恢复时) + 移除 index record
     无记录 → StorageError。
     """
     records = _read_records(project)
@@ -160,48 +349,33 @@ def undo_last(project: Project) -> dict[str, Any]:
         raise StorageError("没有可回滚的历史记录")
 
     rec = records[-1]
-    hdir = _history_dir(project)
+    changes = rec["changes"]
 
-    # 成组恢复: 先全部准备, 再逐个执行(任一失败 → 明确报错, 不半途)
-    restored_meta: Optional[dict[str, Any]] = None
-    for ch in rec["changes"]:
-        target = project.store.safe_path(project.id, ch["target"])
-        if ch["previous"] == "present":
-            backup = project.store.safe_path(project.id, ch["backup"])
-            if not backup.exists():
-                raise StorageError(f"快照文件缺失: {ch['backup']}, 无法回滚")
-            content = backup.read_text(encoding="utf-8")
-            atomic_write_text(target, content)
-            if ch["target"] == "project.json":
-                try:
-                    restored_meta = json.loads(content)
-                except json.JSONDecodeError as e:
-                    raise DataIntegrityError(f"回滚后的 project.json 损坏: {e.msg}")
-        else:
-            # previous=absent: 删除目标
-            if target.exists():
-                target.unlink()
+    # 1) Preflight: 修改任何文件之前一次性验证(§2.1)
+    ready = _preflight_undo(project, changes)
 
-    # 同步内存 metadata(project.json 被恢复时)
-    if restored_meta is not None:
-        if not isinstance(restored_meta, dict):
-            raise DataIntegrityError("回滚后的 project.json 根节点不是对象")
-        project.metadata = restored_meta
+    # 2) 保存 undo 开始前状态(§2.2)
+    captured = _capture_current_state(project, changes)
 
-    # 从 index 移除该条
-    idx = hdir / INDEX_NAME
-    remaining = []
-    if idx.exists():
-        for line in idx.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                raise DataIntegrityError("history index 损坏, 无法移除回滚记录")
-            if r.get("seq") != rec["seq"]:
-                remaining.append(line)
-    atomic_write_text(idx, "\n".join(remaining) + ("\n" if remaining else ""))
+    # 3) 应用 restore; 失败 → 自动回滚到 undo 前(§2.2)
+    try:
+        _apply_undo(project, changes, ready)
+    except Exception as e:
+        try:
+            _apply_captured(project, captured)
+        except Exception as rb:
+            raise DataIntegrityError(
+                "回滚失败且自动恢复未完整完成, 请运行 novel validate") from e
+        raise StorageError(f"回滚失败, 已恢复到回滚前状态") from e
 
+    # 4) 整个 undo 成功后才: 同步内存 metadata(§2.4) + 移除 index record(§2.3)
+    for ch in changes:
+        if ch["target"] == "project.json":
+            if ch["previous"] == "present":
+                _, parsed = ready["project.json"]
+                project.metadata = parsed
+            else:
+                raise DataIntegrityError("回滚删除了 project.json, 项目已损坏")
+            break
+    _remove_record(project, rec)
     return rec

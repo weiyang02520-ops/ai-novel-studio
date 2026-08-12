@@ -5,7 +5,7 @@
 
 ## P0
 
-- [ ] 等待 External ChatGPT M1 review(小说项目 + 章节数据闭环待审)
+- [ ] 等待 External ChatGPT M1 final review(M1 TRANSACTION CLOSEOUT 待审: commit 已推送)
 
 ## P1
 

@@ -220,5 +220,13 @@ def cmd_history_list(args: argparse.Namespace) -> int:
         print("(无历史记录)")
         return 0
     for r in records:
-        print(f"  seq={r.get('seq'):>5d} {r.get('operation',''):20s} {r.get('target',''):30s} {r.get('timestamp','')}")
+        changes = r.get("changes") or []
+        n = len(changes)
+        if n == 0:
+            targets = "(无目标)"
+        elif n == 1:
+            targets = changes[0].get("target", "?")
+        else:
+            targets = f"{changes[0].get('target', '?')}(+{n - 1})"
+        print(f"  seq={r.get('seq'):>5d} {r.get('operation',''):20s} {targets:30s} {r.get('timestamp','')}")
     return 0

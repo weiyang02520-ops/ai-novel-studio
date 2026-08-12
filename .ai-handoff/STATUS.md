@@ -1,10 +1,10 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 13:59 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-12 15:06 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M1 FINAL STABILIZATION complete. Awaiting External ChatGPT final review.**
+**M1 TRANSACTION CLOSEOUT complete. Awaiting External ChatGPT final review.**
 (M1 Gate 未授权; M2 NOT AUTHORIZED。)
 
 ## 本轮变更
@@ -13,11 +13,9 @@
 
 ## 已验证内容
 
-- 单元测试 **162/162 PASS**(含 32 个稳定化测试: 故障注入 A/B/C/D / 崩溃残留 / metadata 损坏 9 例 / history 损坏 / roundtrip / guards)。
-- Acceptance J(confirm undo): confirm→undo→重启进程→draft=v2/confirmed 无/current_chapter=0/validate PASS。
-- Acceptance K(失败 rollback): 4 类故障注入(写 confirmed/写 project.json/删 draft/history 快照失败)→ 磁盘恢复 confirm 前状态(单元测试断言)。
-- Acceptance L(跨文件): duplicate 检测 + list CONFLICT 显示 / metadata str 损坏报错 exit=1 无 traceback / current_chapter 不一致检测 — 全部 CLI 真实验证。
-- M1 正常路径回归(create→write→reopen→update→undo→confirm→reopen)保持 PASS。
+- 单元测试 **176/176 PASS**(新增 14 个 closeout 测试: Case A 双 backup 缺失 0 修改 / Case B 中途写失败字节级回滚 / Case C unlink 失败回滚 / 成功 undo 完整断言(磁盘+内存+重启进程)/ 4 类失败 confirm 无历史无 orphan backup / snapshot 半成品清理+seq / update+confirm 的 history commit 失败回滚 / 诚实报错 2 例)。
+- Acceptance(真实 CLI 临时项目): A Normal Flow PASS / B Confirm+Undo+重启进程 PASS / C Undo Preflight Failure(删 backup→undo 失败 exit=1, 0 修改, validate PASS, record 未消耗)PASS / D Undo Mid-Apply Failure PASS(单元测试 Case B/C 字节级回滚; CLI 无法注入 os.replace)/ E Failed Confirm Cleanup PASS(拒绝路径 exit=1 无 traceback, history 无记录, 0 backup)/ F Snapshot Partial Failure Cleanup PASS(单元测试)/ G Restart/Reopen PASS / H novel validate PASS。
+- M0 regression: test_m0 + test_checkpoint **66/66 PASS**。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
 
 ## 未验证内容
@@ -32,5 +30,5 @@
 
 ## 下一步
 
-- P0: 等待 External ChatGPT M1 final review。
+- P0: 等待 External ChatGPT M1 final review(本轮 closeout)。
 - P1: M2(Provider + config test-provider)仅在明确授权后开始。

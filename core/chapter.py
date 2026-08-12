@@ -287,9 +287,10 @@ def update_draft(project: Project, number: int, title: Optional[str] = None,
         raise StorageError(
             f"当前 origin={meta['origin']!r}, M1 手动入口仅支持 manual 草稿")
 
-    # 修改前快照(已有内容)
-    from .history import snapshot
-    snapshot(project, "chapter.update", f"drafts/{path.name}")
+    # 修改前快照: 先准备(backups 就位, index 未写); 业务成功后才 commit history
+    # 失败 → 恢复原内容 + 清理 backups; 失败的 operation 不进入 undo history
+    from .history import prepare_snapshot
+    prepared = prepare_snapshot(project, "chapter.update", [f"drafts/{path.name}"])
 
     new_meta = dict(meta)
     if title is not None:
@@ -300,7 +301,21 @@ def update_draft(project: Project, number: int, title: Optional[str] = None,
     new_meta["words"] = count_words(body)
     new_meta["updated_at"] = _now_iso()
     chapter = Chapter(new_meta, body, path, is_draft=True)
-    atomic_write_text(path, chapter.render())
+    try:
+        atomic_write_text(path, chapter.render())
+        prepared.commit()  # 业务成功后才写 history index
+    except Exception as e:
+        restored = False
+        try:
+            prepared.restore()
+            restored = True
+        except Exception:
+            pass  # restore 失败: backups 保留, 报错提示人工检查
+        if restored:
+            prepared.discard()
+            raise StorageError("更新草稿失败, 已恢复到更新前状态") from e
+        raise DataIntegrityError(
+            "更新草稿失败且自动恢复未完整完成, 请检查草稿文件并运行 novel validate") from e
     return chapter
 
 
@@ -309,14 +324,15 @@ def confirm_draft(project: Project, number: int) -> Chapter:
 
     事务边界: drafts/chNNNN.draft.md + chapters/chNNNN.md + project.json + history。
     任何一步失败 → 恢复 confirm 前状态(磁盘 + 内存 metadata)。
+    失败的 confirm 不出现在 undo history 中(先 prepare, 业务全成功后才 commit)。
     绝不留下: current_chapter 已推进但 confirmed 不存在 / confirmed 存在但未推进 /
               draft+confirmed 双份且系统认为正常。
 
     流程:
       1. 完整验证输入
-      2. 快照全部 3 个目标(history, changes 列表)
-      3. 写 confirmed → 4. 更新 project.json → 5. 删除 draft
-      6. 任一步异常 → rollback(恢复旧 project.json/draft, 删除新建 confirmed)
+      2. prepare 快照(backups 就位, index 未写)
+      3. 写 confirmed → 4. 更新 project.json → 5. 删除 draft → 6. commit history
+      7. 任一步失败 → restore 业务文件 + discard backups + 诚实报错
     """
     _validate_number(number)
     path = draft_path(project, number)
@@ -341,15 +357,13 @@ def confirm_draft(project: Project, number: int) -> Chapter:
     if confirmed.exists():
         raise DataIntegrityError(f"已存在确认章节 chapters/{confirmed.name}, 拒绝覆盖")
 
-    # 内存旧状态(rollback 用)
+    # 内存旧状态 + 先 prepare 快照(backups 就位, index 未写; 业务全成功后才 commit)
     old_metadata = dict(project.metadata)
-    old_draft_text = text
     draft_rel = f"drafts/{path.name}"
     confirmed_rel = f"chapters/{confirmed.name}"
 
-    # 1) history 快照(3 个目标的 changes 列表, 供完整 undo)
-    from .history import snapshot_multi
-    snapshot_multi(project, "chapter.confirm", [draft_rel, "project.json", confirmed_rel])
+    from .history import prepare_snapshot
+    prepared = prepare_snapshot(project, "chapter.confirm", [draft_rel, "project.json", confirmed_rel])
 
     # 2) 准备 confirmed 内容
     now = _now_iso()
@@ -359,8 +373,7 @@ def confirm_draft(project: Project, number: int) -> Chapter:
     new_meta["updated_at"] = now
     confirmed_chapter = Chapter(new_meta, body, confirmed, is_draft=False)
 
-    # 3) 写入 confirmed → 4) 更新 project.json → 5) 删除 draft
-    #    任一步失败 → rollback
+    # 3) 事务: 写 confirmed → 更新 project.json → 删 draft → commit history
     try:
         atomic_write_text(confirmed, confirmed_chapter.render())
 
@@ -373,22 +386,23 @@ def confirm_draft(project: Project, number: int) -> Chapter:
 
         # draft 删除失败 = confirm 整体失败(不能留下双份)
         path.unlink()
+
+        prepared.commit()  # 业务全部成功后才写 history index
     except Exception as e:
-        # ── rollback: 恢复 confirm 前状态 ──
+        # ── rollback: 恢复 confirm 前状态(磁盘 + 内存) ──
+        restored = False
         try:
-            if confirmed.exists():
-                confirmed.unlink()
-            if (project.dir / "project.json").exists():
-                atomic_write_text(project.dir / "project.json",
-                                  json.dumps(old_metadata, ensure_ascii=False, indent=2))
-            if not path.exists():
-                atomic_write_text(path, old_draft_text)
+            prepared.restore()
+            restored = True
         except Exception:
-            pass  # rollback 尽力而为; 主异常优先抛出
-        project.metadata = old_metadata  # 恢复内存状态
-        if isinstance(e, (StorageError, DataIntegrityError)):
-            raise
-        raise StorageError(f"确认章节失败(已回滚): {e}")
+            pass  # restore 失败: backups 保留(不 discard), 诚实报错
+        if restored:
+            prepared.discard()
+        project.metadata = old_metadata  # 内存始终恢复旧值
+        if restored:
+            raise StorageError("确认章节失败, 已恢复到确认前状态") from e
+        raise DataIntegrityError(
+            "确认失败且自动恢复未完整完成, 请运行 novel validate") from e
 
     return confirmed_chapter
 
