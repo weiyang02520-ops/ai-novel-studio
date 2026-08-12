@@ -84,9 +84,11 @@ class ChatChunk:
 
     kind:
       text       — text 增量
-      tool_call  — 工具调用增量(index/id/name/arguments_delta)
+      tool_call  — 工具调用增量(index/id/name/arguments_delta; 各字段只含本块的 delta, 非累计值)
       finish     — finish_reason
       usage      — 服务端最终 usage(可能没有)
+
+    tool_call_arguments_delta 是增量: 消费方按 index 自行拼接(或用 ToolCallAccumulator)。
     """
 
     kind: str = "text"
@@ -94,6 +96,6 @@ class ChatChunk:
     tool_call_index: Optional[int] = None
     tool_call_id: Optional[str] = None
     tool_call_name: Optional[str] = None
-    tool_call_arguments: Optional[str] = None
+    tool_call_arguments_delta: Optional[str] = None
     finish_reason: str = ""
     usage: Optional[Usage] = None

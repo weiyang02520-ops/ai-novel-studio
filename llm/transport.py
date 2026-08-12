@@ -91,6 +91,15 @@ class HttpTransport:
             headers={"User-Agent": user_agent},
         )
 
+    def close(self) -> None:
+        """释放 httpx.Client(幂等, 可重复调用; Provider.close 会触发)。"""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
+
     # ── 非流式 ───────────────────────────────────────────
 
     def post_json(self, url: str, headers: dict[str, str], payload: dict[str, Any]) -> TransportResponse:

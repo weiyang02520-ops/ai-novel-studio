@@ -173,12 +173,20 @@ class OpenAICompatibleProvider(BaseProvider):
     # ── URL / 请求构造 ───────────────────────────────────
 
     def _endpoint(self) -> str:
+        """生成 /chat/completions endpoint; 运行时再次校验 URL(用户手工改 settings 也拦得住)。
+
+        - 普通 base: https://example.com/v1 → /v1/chat/completions(末尾 / 不产生 //)
+        - 已填完整 endpoint: https://example.com/v1/chat/completions → 原样使用
+        - query/fragment/userinfo/非 http(s) → CONFIG_ERROR(防拼接歧义与凭据泄漏)
+        """
         base = self.config.base_url.strip()
         if not base:
             raise ProviderError(CONFIG_ERROR, "base_url 未配置。请运行: config set default_model.base_url <BASE_URL>", retryable=False)
-        if not base.startswith(("http://", "https://")):
-            raise ProviderError(CONFIG_ERROR, f"base_url 必须是 http(s) URL, 实际: {base[:40]}", retryable=False)
-        base = base.rstrip("/")  # §14: 末尾 / 不产生 //
+        from core.config import validate_provider_base_url
+        url_err = validate_provider_base_url(base)
+        if url_err:
+            raise ProviderError(CONFIG_ERROR, f"base_url 无效: {url_err}", retryable=False)
+        base = base.rstrip("/")
         if base.endswith("/chat/completions"):
             return base  # §15: 已填完整 endpoint → 原样使用
         return base + "/chat/completions"
@@ -367,20 +375,25 @@ class OpenAICompatibleProvider(BaseProvider):
                     if not isinstance(index, int):
                         index = 0
                     buf = tool_buf.setdefault(index, {"id": "", "name": "", "args": ""})
+                    # 契约: 对外 ChatChunk 各字段只含本块的 delta(非累计值)
+                    id_delta, name_delta, args_delta = "", "", ""
                     tc_id = rtc.get("id")
                     if isinstance(tc_id, str) and tc_id:
                         buf["id"] = tc_id
+                        id_delta = tc_id
                     fn = rtc.get("function")
                     if isinstance(fn, dict):
                         name = fn.get("name")
                         if isinstance(name, str) and name:
                             buf["name"] = name
+                            name_delta = name
                         args = fn.get("arguments")
                         if isinstance(args, str) and args:
-                            buf["args"] += args
+                            buf["args"] += args  # buffer 只用于内部最终聚合
+                            args_delta = args
                     yield ChatChunk(kind="tool_call", tool_call_index=index,
-                                    tool_call_id=buf["id"], tool_call_name=buf["name"],
-                                    tool_call_arguments=buf["args"])
+                                    tool_call_id=id_delta, tool_call_name=name_delta,
+                                    tool_call_arguments_delta=args_delta)
 
             finish = c0.get("finish_reason")
             if isinstance(finish, str) and finish:

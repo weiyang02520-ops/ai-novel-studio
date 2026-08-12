@@ -81,10 +81,16 @@ def test_config_validate_offline_cli(tmp_path):
 
 
 def test_config_validate_rejects_key_in_url(tmp_path):
-    _run(tmp_path, "config", "set", "default_model.base_url", "http://x.com/v1?api_key=secret123")
-    r = _run(tmp_path, "config", "validate")
+    # config set 在写入前直接拒绝(比 validate 更早的防线)
+    r = _run(tmp_path, "config", "set", "default_model.base_url", "http://x.com/v1?api_key=secret123")
     assert r.returncode == 1
-    assert "api_key" in r.stdout
+    assert "拒绝" in r.stdout
+    assert "secret123" not in r.stdout  # 不回显 secret
+    # 手工写坏 URL 到 settings → validate 也拒绝
+    _write_settings(tmp_path, base_url="http://x.com/v1?api_key=secret123")
+    r2 = _run(tmp_path, "config", "validate")
+    assert r2.returncode == 1
+    assert "base_url" in r2.stdout
 
 
 def test_config_validate_unsupported_provider(tmp_path):

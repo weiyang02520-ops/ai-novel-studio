@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 DEFAULT_SETTINGS = {
     "default_model": {
@@ -264,6 +265,7 @@ class Settings:
         """按点路径设置白名单字段(带类型转换)。
 
         未知字段 → ConfigError; 敏感字段(api_key/token/password/secret/credential)→ 拒绝。
+        base_url → 写文件前先 validate_provider_base_url(安全边界在持久化层, 不只在 CLI)。
         """
         parts = dotted_key.split(".")
         # 敏感字段拦截(整个路径中任一中间段命中)
@@ -272,6 +274,11 @@ class Settings:
                 raise ConfigError(
                     f"拒绝通过 config set 修改敏感字段 '{dotted_key}'(使用 config set-key 写入 SecretStore)"
                 )
+        # base_url: 写前验证(拒绝 userinfo/query/fragment/非 http(s)); 错误消息不含完整 URL
+        if dotted_key.endswith(".base_url"):
+            url_err = validate_provider_base_url(str(value))
+            if url_err:
+                raise ConfigError(f"拒绝设置 {dotted_key}: {url_err}")
         # models.<role>.<field>: 允许角色级模型配置(字段白名单 = default_model 白名单去前缀)
         if len(parts) == 3 and parts[0] == "models":
             role, sub = parts[1], parts[2]
@@ -333,9 +340,39 @@ class ValidationIssue:
         return f"[{self.severity.upper()}] {self.message}"
 
 
-_URL_RE = re.compile(r"^https?://", re.I)
-# §88: base_url 中带 Key 参数 → 拒绝(敏感)
-_SENSITIVE_QUERY_RE = re.compile(r"[?&](api_key|key|token)=", re.I)
+def validate_provider_base_url(url: str) -> Optional[str]:
+    """校验 Provider base_url(持久化 + 运行时共用; 安全边界不只在 CLI)。
+
+    使用标准 URL parser(urllib.parse.urlsplit), 不用 startswith/regex。
+
+    允许:
+      https://api.example.com/v1
+      http://localhost:11434/v1
+      http://127.0.0.1:8000/v1
+      https://example.com/v1/chat/completions   (完整 endpoint)
+
+    拒绝(返回错误消息, None = 合法):
+      空 / 仅 scheme("https://") / 非 http(s)(file/ftp/...)
+      userinfo(https://user:pass@example.com)
+      任何 query(?api_key=/token=/auth=... 以及 ?foo=bar → 全拒, 防 endpoint 拼接歧义)
+      任何 fragment
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return "base_url 为空"
+    u = urlsplit(raw)
+    scheme = (u.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return "base_url 必须使用 http/https(其它协议已拒绝)"
+    if not u.hostname:
+        return "base_url 缺少主机名(host)"
+    if u.username is not None or u.password is not None:
+        return "base_url 不应包含 userinfo(用户名/密码请通过 SecretStore 配置)"
+    if u.query:
+        return "base_url 不应包含 query 参数(可能携带凭据, 且会造成 endpoint 拼接歧义; 已拒绝)"
+    if u.fragment:
+        return "base_url 不应包含 fragment(已拒绝)"
+    return None
 
 
 def validate_settings(s: Settings, secret_store: Any) -> list[ValidationIssue]:
@@ -343,7 +380,7 @@ def validate_settings(s: Settings, secret_store: Any) -> list[ValidationIssue]:
 
     检查:
       - provider 是否支持
-      - Base URL 格式 + 不含 Key 参数
+      - Base URL(统一 validate_provider_base_url, 不联网)
       - model 是否存在
       - secret_reference 是否存在(或为空时允许无 Key 场景 + warning)
       - SecretStore 能否找到 Key(仅存在性, 不联网)
@@ -357,11 +394,10 @@ def validate_settings(s: Settings, secret_store: Any) -> list[ValidationIssue]:
                 "error", f"{label}: 不支持的 provider: {cfg.provider!r}(支持: {sorted(SUPPORTED_PROVIDERS)})"))
         if not cfg.base_url:
             issues.append(ValidationIssue("error", f"{label}: base_url 为空"))
-        elif not _URL_RE.match(cfg.base_url):
-            issues.append(ValidationIssue("error", f"{label}: base_url 不是合法 http(s) URL: {cfg.base_url[:40]}"))
-        elif _SENSITIVE_QUERY_RE.search(cfg.base_url):
-            issues.append(ValidationIssue(
-                "error", f"{label}: base_url 不应包含 API Key 参数(api_key/key/token)。Key 请存入 SecretStore(config set-key)。"))
+        else:
+            url_err = validate_provider_base_url(cfg.base_url)
+            if url_err:
+                issues.append(ValidationIssue("error", f"{label}: base_url 无效: {url_err}"))
         if not cfg.model:
             issues.append(ValidationIssue("error", f"{label}: model 为空"))
         if cfg.secret_reference:

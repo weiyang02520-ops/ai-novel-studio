@@ -136,3 +136,22 @@
 - `?? tests/test_provider_types.py`
 - `?? tests/test_usage.py`
 
+
+## 2026-08-12 17:07 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M core/config.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M llm/factory.py`
+- ` M llm/openai_compatible.py`
+- ` M llm/provider.py`
+- ` M llm/transport.py`
+- ` M llm/types.py`
+- ` M tests/test_m2_cli.py`
+- ` M tests/test_provider_http.py`
+- ` M tests/test_provider_stream.py`
+- `?? tests/test_provider_urls.py`
+

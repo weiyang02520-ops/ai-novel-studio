@@ -10,27 +10,25 @@
 
 ## phase
 
-**M2 implementation complete. Awaiting External ChatGPT M2 review.**
+**M2 FINAL CLOSEOUT complete. Awaiting External ChatGPT final review.**
 (M2 未宣布 PASS; M3 NOT AUTHORIZED。)
 
 ## real_external_provider
 
-**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**(生产 settings.json 已配置 DeepSeek base_url/model, 但 secret_reference 为空; 按红线不主动枚举/窃取 Key。用户运行 `config set default_model.secret_reference ...` + `config set-key ...` 后即可 test-provider 验证。)
+**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**(生产 settings.json 已配置 DeepSeek base_url/model, 但 secret_reference 为空; 按红线不主动枚举/窃取 Key。用户运行 `config set default_model.secret_reference ...` + `config set-key ...` 后即可 test-provider 验证。M2 工程 Gate 由 External ChatGPT 根据实现 + localhost production-path 判断。)
 ## last_round
 
-- **M2 COMPLETE MEGA BATCH**(Provider + 真实 API + Streaming + Chat + Usage + Diagnostics):
-  1. **llm/ 模块**: types.py(内部统一模型 ChatMessage/ToolCall/Usage/ChatResult/ChatChunk)、provider.py(BaseProvider + 15 种错误码 + estimate_tokens)、transport.py(httpx 封装: connect/read 超时分离、follow_redirects=False、verify=True、SSEStream 异常包装)、openai_compatible.py(端点拼接/防 Key 查询参数/SecretStore 解析/非流式+SSE 解析/状态映射/重试)、factory.py(仅 openai_compatible, 未知 provider 拒绝)、usage.py(JSONL metadata-only)、testing.py(FakeProvider/FakeTransport 供 M3 复用)。
-  2. **错误映射**: 400(模型不存在/context 超长分类)/401/403/404/405(端点提示)/408(可重试)/409/422/429(Retry-After 提示)/5xx(可重试 1 次)/418 等未知 → HTTP_ERROR; HTML 错误页安全消息; body 截断 600 chars; 服务端回显 Key → [REDACTED]。
-  3. **重试边界**: 网络/timeout/5xx 最多 1 次(总 ≤2); 400/401/403/404/429 不重试; 流式已产出 → STREAM_INTERRUPTED 不从头重试。
-  4. **CLI**: config test-provider(--role, 真联网最小 chat/completions)/delete-key/key-status(不显示 Key)/config show 增强(key: configured/missing/unknown)/chat(--role/--system/--no-stream/--temperature 校验/默认流式/空输入拒绝/超长本地保护/Ctrl+C→130)/usage summary+recent; 全部无 traceback。
-  5. **usage**: data/logs/usage.jsonl(可注入路径), 只记 metadata, 坏行跳过+warning, 写失败不阻断聊天成功。
-  6. **依赖**: pyproject.toml 新增 httpx>=0.27(通用 HTTP: timeout/streaming/SSE/testability; 无厂商 SDK)。
-  7. **测试**: 新增 6 个文件 + local mock server(ThreadingHTTPServer, localhost): 单测(FakeTransport: 解析/状态/重试/泄漏)、集成(真实 HttpTransport→mock: non-stream/stream/auth/keyless/retry/interrupt)、CLI subprocess(全命令 + 全局 Secret 不泄漏断言)。
+- **M2 FINAL CLOSEOUT BATCH**(External ChatGPT CHANGES_REQUESTED 修复):
+  1. **Base URL 安全强制到生产路径**: 新增 `validate_provider_base_url()`(urllib.parse.urlsplit, 非 regex/startswith), 四入口复用 — config validate / config set base_url 写前 / factory.create_provider / provider._endpoint(运行时最后防线, 手工改 settings 也拦得住)。允许 http(s)+host(localhost/127.0.0.1)+完整 /chat/completions endpoint; 拒绝 空/仅 scheme/file/ftp/userinfo/任何 query(含 api_key/apikey/key/token/access_token/auth/authorization, 大小写不敏感)/fragment; 错误消息不含完整 URL(防回显 secret)。
+  2. **config set 写前拒绝**: 危险 URL 在写入 settings.json 前抛 ConfigError; secret_reference 正常显示; 不建立"打印所有值"模式。
+  3. **ToolCall delta 契约**: ChatChunk.tool_call_arguments 改名 **tool_call_arguments_delta**, 每块只含本块增量(不再输出累计值); 新增 ToolCallAccumulator(按 index 聚合, M3 复用); 测试全部改为 Consumer 方式拼接断言。
+  4. **HttpTransport.close**: 真正释放 httpx.Client, 幂等可重复调用; Provider.close → transport.close 链路测试(成功/失败后均 close)。
+  5. **测试**: 新增 test_provider_urls.py(允许 5 / 拒绝 16 / set 写前 / 运行时 / secret 不泄漏 5 类)+ 重写 stream tool_call 测试(delta 断言 4 个)+ close 测试 4 个 + CLI 更新; 全量 385/385。
 ## verified
 
-- 单元测试 **314/314 PASS**(新增 138 个 M2 测试: types 13 / http 41 / stream 16 / errors 14 / usage 9 / 集成 13 / CLI 21 + 4 个既有修复回归)。
-- Acceptance(A-I, 真实 CLI + local mock): A test-provider 成功 PASS / B chat 流式拼接 AI Novel Studio PASS / C keyless 无 Authorization PASS / D 401 安全错误无 Key 无 traceback PASS / E 503→200 retry 请求数 2 PASS / F 429 请求数 1 PASS / G stream interrupt 部分保留不重试 PASS / H usage summary requests 正确 PASS / I validate 离线(httpx.Client monkeypatch 断言不联网)PASS。
-- Secret 安全: 全局泄漏断言(401/403/500/network/malformed/chat CLI/test-provider → stdout/stderr/exception/usage 文件/settings 均无 fake secret)PASS。
+- 单元测试 **385/385 PASS**(M2 CLOSEOUT 新增 71: URL 校验允许 5/拒绝 16/set 写前/运行时/secret 不泄漏、tool_call delta consumer 断言 4、close 生命周期 4、CLI 更新)。
+- Acceptance(A-I, 真实 CLI + local mock): A test-provider 成功 PASS / B chat 流式拼接 PASS / C keyless 无 Authorization PASS / D 401 安全错误 PASS / E 503→200 retry 请求数 2 PASS / F 429 请求数 1 PASS / G stream interrupt 部分保留不重试 PASS / H usage summary PASS / I validate 离线(httpx.Client monkeypatch 断言)PASS。
+- Secret 安全: 全局泄漏断言(401/403/500/network/malformed/chat CLI/test-provider/URL 拒绝路径 → stdout/stderr/exception/usage/settings 均无 fake secret)PASS。
 - M0 regression: test_m0 + test_checkpoint **66/66 PASS**; M1 regression: novel/chapter/history/transaction 全部 PASS。
 - Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
 
@@ -114,5 +112,6 @@ ai-novel-studio/
 
 ## recent_changes
 
-- M2 COMPLETE: Provider 链路(httpx transport→OpenAI-compatible→BaseProvider)+ chat 流式/非流式 + config test-provider/delete-key/key-status + usage + 错误映射/重试/Key 安全, 314/314 测试通过, Acceptance A-I PASS, REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG(详见 last_round)。
+- M2 FINAL CLOSEOUT: URL 安全四入口强制(set 写前/validate/factory/endpoint)+ ToolCall delta 契约 + HttpTransport.close 生命周期, 385/385 测试通过(详见 last_round)。
+- M2 COMPLETE: Provider 链路(httpx transport→OpenAI-compatible→BaseProvider)+ chat 流式/非流式 + config test-provider/delete-key/key-status + usage + 错误映射/重试/Key 安全, 314/314 测试通过, Acceptance A-I PASS, REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG。
 - M1 TRANSACTION CLOSEOUT: undo all-or-nothing + confirm 无幽灵 history + snapshot 半成品清理 + 诚实报错, 176/176 测试通过, Acceptance A-H 全 PASS。

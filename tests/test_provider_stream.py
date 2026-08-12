@@ -14,7 +14,7 @@ from llm.provider import (
 )
 from llm.testing import FakeTransport
 from llm.transport import TransportError, TransportHTTPError
-from llm.types import ChatMessage
+from llm.types import ChatChunk, ChatMessage
 from conftest import FakeSecretStore, fake_key
 
 
@@ -111,9 +111,11 @@ def test_stream_without_usage_no_crash():
     assert usage is None  # 调用方(CLI)负责 estimated 兜底
 
 
-# ── 流式 tool_calls 聚合(§42, 102) ────────────────────────
+# ── 流式 tool_calls delta 契约(§5-7) ─────────────────────
 
-def test_stream_tool_call_arguments_aggregated():
+def test_stream_tool_call_arguments_are_deltas_not_cumulative():
+    """Consumer 方式: 每块输出自己的 delta; 拼接后得到完整 arguments。"""
+    from llm.provider import ToolCallAccumulator
     ft = FakeTransport()
     ft.stream_lines = [
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"f1","arguments":""}}]}}]}',
@@ -123,27 +125,74 @@ def test_stream_tool_call_arguments_aggregated():
         'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
         "data: [DONE]",
     ]
-    _, finish, _, tool_calls = _collect(_prov(transport=ft))
-    assert finish == "tool_calls"
-    assert len(tool_calls) == 4
-    last = tool_calls[-1]
-    assert last.tool_call_id == "call_1"
-    assert last.tool_call_name == "f1"
-    assert last.tool_call_arguments == '{"chapter":1}'
+    chunks = list(_prov(transport=ft).stream_chat([ChatMessage(role="user", content="hi")]))
+
+    # delta 非累计: 第 2/3/4 块只含各自增量
+    deltas = [c.tool_call_arguments_delta or "" for c in chunks if c.kind == "tool_call"]
+    assert deltas == ["", '{"chap', 'ter":', "1}"], f"必须是 delta 而非累计值: {deltas}"
+
+    # consumer 方式拼接
+    args = ""
+    for c in chunks:
+        if c.kind == "tool_call":
+            args += c.tool_call_arguments_delta or ""
+    assert args == '{"chapter":1}'
+
+    # id/name 只出现一次(不会因累计重复)
+    ids = [c.tool_call_id for c in chunks if c.kind == "tool_call" and c.tool_call_id]
+    names = [c.tool_call_name for c in chunks if c.kind == "tool_call" and c.tool_call_name]
+    assert ids == ["call_1"]
+    assert names == ["f1"]
+
+    # ToolCallAccumulator 聚合契约
+    acc = ToolCallAccumulator()
+    for c in chunks:
+        acc.add(c)
+    calls = acc.tool_calls()
+    assert len(calls) == 1
+    assert calls[0].id == "call_1"
+    assert calls[0].name == "f1"
+    assert calls[0].arguments_json == '{"chapter":1}'
 
 
-def test_stream_multiple_tool_call_indexes():
+def test_stream_tool_call_multiple_indexes_independent():
+    """多 index(0/1)各自独立聚合, delta 互不串扰。"""
+    from llm.provider import ToolCallAccumulator
     ft = FakeTransport()
     ft.stream_lines = [
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"f_a","arguments":"{}"}},'
-        '{"index":1,"id":"b","function":{"name":"f_b","arguments":"{}"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"f_a","arguments":"{\\"x\\":"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"f_b","arguments":"{\\"y\\":"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]}}]}',
         'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
         "data: [DONE]",
     ]
-    _, _, _, tool_calls = _collect(_prov(transport=ft))
-    assert len(tool_calls) == 2
-    assert {tc.tool_call_index for tc in tool_calls} == {0, 1}
-    assert {tc.tool_call_name for tc in tool_calls} == {"f_a", "f_b"}
+    chunks = list(_prov(transport=ft).stream_chat([ChatMessage(role="user", content="hi")]))
+
+    acc = ToolCallAccumulator()
+    for c in chunks:
+        acc.add(c)
+    calls = acc.tool_calls()
+    assert len(calls) == 2
+    assert calls[0].id == "a" and calls[0].name == "f_a" and calls[0].arguments_json == '{"x":1}'
+    assert calls[1].id == "b" and calls[1].name == "f_b" and calls[1].arguments_json == '{"y":2}'
+
+
+def test_tool_call_accumulator_clear():
+    from llm.provider import ToolCallAccumulator
+    acc = ToolCallAccumulator()
+    acc.add(ChatChunk(kind="tool_call", tool_call_index=0, tool_call_id="c1",
+                      tool_call_name="f", tool_call_arguments_delta="{}"))
+    assert len(acc.tool_calls()) == 1
+    acc.clear()
+    assert acc.tool_calls() == []
+
+
+def test_tool_call_accumulator_ignores_non_tool_chunks():
+    from llm.provider import ToolCallAccumulator
+    acc = ToolCallAccumulator()
+    acc.add(ChatChunk(kind="text", text="hi"))
+    acc.add(ChatChunk(kind="finish", finish_reason="stop"))
+    assert acc.tool_calls() == []
 
 
 # ── 畸形 SSE(§47) ────────────────────────────────────────

@@ -384,6 +384,45 @@ def test_empty_messages_rejected():
     assert e.value.code == CONFIG_ERROR
 
 
+# ── 生命周期 close(§9-11) ─────────────────────────────────
+
+def test_provider_close_calls_transport():
+    ft = FakeTransport()
+    ft.add_response(200, OK_BODY)
+    p = _prov(transport=ft)
+    p.chat([ChatMessage(role="user", content="hi")])
+    assert ft.close_called is False
+    p.close()
+    assert ft.close_called is True
+
+
+def test_provider_close_idempotent():
+    ft = FakeTransport()
+    ft.add_response(200, OK_BODY)
+    p = _prov(transport=ft)
+    p.chat([ChatMessage(role="user", content="hi")])
+    p.close()
+    p.close()  # 重复 close 不报错
+
+
+def test_provider_close_after_error():
+    ft = FakeTransport()
+    ft.add_response(401, {"error": {"message": "bad"}})
+    p = _prov(transport=ft)
+    with pytest.raises(ProviderError):
+        p.chat([ChatMessage(role="user", content="hi")])
+    p.close()  # 失败后也能正常关闭
+    assert ft.close_called is True
+
+
+def test_http_transport_close_real_client():
+    """生产 HttpTransport.close 真正释放 httpx.Client, 且可重复调用。"""
+    from llm.transport import HttpTransport
+    t = HttpTransport()
+    t.close()
+    t.close()  # 幂等
+
+
 # ── unicode 请求体(§142) ─────────────────────────────────
 
 def test_unicode_messages_serialized():

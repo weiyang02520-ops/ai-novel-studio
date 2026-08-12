@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Iterator, Optional
 
 from core.config import ModelConfig
-from llm.types import ChatChunk, ChatMessage, ChatResult
+from llm.types import ChatChunk, ChatMessage, ChatResult, ToolCall
 
 # ── 错误码 ────────────────────────────────────────────────
 
@@ -53,6 +53,38 @@ class ProviderError(Exception):
         self.retryable = retryable
         self.provider_error_code = provider_error_code
         super().__init__(message)
+
+
+class ToolCallAccumulator:
+    """流式 tool_call delta 聚合(Consumer / 测试 / 未来 M3 Runtime 用)。
+
+    ChatChunk.tool_call_arguments_delta 是增量; 本类按 index 聚合成完整 ToolCall。
+    Provider 内部维护的 buffer 与这里是同一契约的两种实现 — 不把累计值伪装成 delta。
+    """
+
+    def __init__(self) -> None:
+        self._buf: dict[int, dict[str, str]] = {}
+
+    def add(self, chunk: ChatChunk) -> None:
+        if chunk.kind != "tool_call":
+            return
+        index = chunk.tool_call_index if chunk.tool_call_index is not None else 0
+        buf = self._buf.setdefault(index, {"id": "", "name": "", "args": ""})
+        if chunk.tool_call_id:
+            buf["id"] = chunk.tool_call_id
+        if chunk.tool_call_name:
+            buf["name"] = chunk.tool_call_name
+        if chunk.tool_call_arguments_delta:
+            buf["args"] += chunk.tool_call_arguments_delta
+
+    def tool_calls(self) -> list[ToolCall]:
+        return [
+            ToolCall(id=b["id"], name=b["name"], arguments_json=b["args"])
+            for _, b in sorted(self._buf.items())
+        ]
+
+    def clear(self) -> None:
+        self._buf.clear()
 
 
 class BaseProvider:

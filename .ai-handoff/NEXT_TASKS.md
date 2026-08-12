@@ -5,7 +5,7 @@
 
 ## P0
 
-- [ ] 等待 External ChatGPT M2 review(M2 implementation complete; REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG)
+- [ ] 等待 External ChatGPT M2 final review(M2 FINAL CLOSEOUT 已推送; REAL_EXTERNAL=UNVERIFIED_MISSING_CONFIG)
 
 ## P1
 

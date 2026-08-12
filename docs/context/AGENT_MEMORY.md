@@ -81,6 +81,9 @@ ai-novel-studio/
 - **retry boundary**: 仅网络/timeout/5xx 最多重试 1 次(总尝试 ≤ 2); 400/401/403/404/429 不重试; 流式已产出任何 token → 不从头重试(STREAM_INTERRUPTED, 部分内容保留)
 - **usage 隐私**: usage.jsonl 只记 metadata(tokens/model/duration), 绝不记 prompt/response/Key; 坏行跳过+warning(派生数据 ≠ history 严格性); usage 写失败不影响聊天成功
 - **config validate 离线**: 绝不联网; test-provider 才真联网(最小 chat/completions 请求, 不 GET /models)
-- **URL 安全**: 仅 http(s); 末尾 / 不产生 //; 已填完整 /chat/completions 原样使用; base_url 带 api_key=/key=/token= → validate error; follow_redirects=False 防跨 host 泄漏 Authorization
+- **URL 安全**: 统一 validate_provider_base_url(urllib.parse.urlsplit)在**持久化 + 运行时**双边界强制: config set 写前 / config validate / factory / provider._endpoint 四入口复用; 仅 http(s)+host; 拒绝 userinfo/任何 query(含凭据参数, 大小写不敏感)/fragment/非 http(s); 完整 /chat/completions endpoint 原样使用, 末尾 / 不产生 //
+- **credentials never belong in URL**: 拒绝时错误消息不含完整 URL(防回显 secret); Key 只能走 SecretStore
+- **ChatChunk tool-call 字段是 delta**: tool_call_arguments_delta 每块只含本块增量(非累计); 聚合用 ToolCallAccumulator(按 index 独立); 内部 buffer 不伪装成 delta
+- **HttpTransport lifecycle**: Provider.close() → transport.close()(释放 httpx.Client, 幂等); chat/test-provider 成功失败都走 finally close
 - **流式**: SSE 逐行(data: 前缀/忽略空行注释/[DONE]); delta.content → text chunk; tool_calls 按 index 聚合; finish_reason 未知不崩溃; usage 可选, 缺失 → estimated
 - **keyless**: secret_reference 空 → 不发送 Authorization(本地 Ollama); validate 给 warning 不 error
