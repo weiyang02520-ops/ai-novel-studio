@@ -165,12 +165,14 @@ def build_parser() -> argparse.ArgumentParser:
     ks.add_argument("reference")
 
     # ── chat ──
-    chat = sub.add_parser("chat", help="直接对话(Provider → 模型 → 文本)")
+    chat = sub.add_parser("chat", help="直接对话(无 --project = raw Provider; 有 --project = 主编项目对话)")
     chat.add_argument("prompt", help="用户消息")
     chat.add_argument("--role", help="模型配置 profile(writer/reviewer...); 缺省 default_model")
-    chat.add_argument("--system", help="system 消息(可选)")
+    chat.add_argument("--system", help="system 消息(可选; 仅 raw chat)")
     chat.add_argument("--no-stream", action="store_true", help="非流式: 完整响应后一次打印")
     chat.add_argument("--temperature", type=float, default=None, help="覆盖本次请求温度(不写入 settings.json)")
+    chat.add_argument("--project", help="项目 ID: 走 Chief 主编(只读工具 + grounded 回答)")
+    chat.add_argument("--show-tools", action="store_true", help="主编对话: 显示工具调用 trace(不含工具内容)")
 
     # ── usage ──
     usage = sub.add_parser("usage", help="本地 usage 统计")
@@ -267,10 +269,14 @@ def _main(argv: list[str] | None = None) -> int:
         if args.config_command == "key-status":
             return m2.cmd_config_key_status(args)
 
-    # M2 命令(chat / usage) — 懒加载
+    # M2/M3 命令(chat / usage) — 懒加载
     import adapters.cli.m2 as m2
 
     if args.command == "chat":
+        # §94: --project 存在 → Chief Agent; 否则 M2 raw provider chat(§93)
+        if getattr(args, "project", None):
+            import adapters.cli.m3 as m3
+            return m3.cmd_chat_chief(args)
         return m2.cmd_chat(args)
 
     if args.command == "usage":

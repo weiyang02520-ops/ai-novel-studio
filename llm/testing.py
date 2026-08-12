@@ -13,27 +13,44 @@ from llm.types import ChatChunk, ChatMessage, ChatResult, ToolCall, Usage
 
 
 class FakeProvider(BaseProvider):
-    """可脚本化行为的 Provider(供测试与 M3 开发)。"""
+    """可脚本化行为的 Provider(供测试与 M3 开发)。
+
+    replies: ChatResult/ProviderError 响应队列(每轮 chat 弹出一条; M3 Agent loop 用)。
+    旧字段 reply_text/tool_calls/error 保持兼容。
+    """
 
     def __init__(self, config: Any, *, reply_text: str = "OK",
                  tool_calls: Optional[list[ToolCall]] = None,
                  error: Optional[ProviderError] = None,
                  stream_chunks: Optional[list[ChatChunk]] = None,
-                 stream_error: Optional[ProviderError] = None):
+                 stream_error: Optional[ProviderError] = None,
+                 replies: Optional[list[Any]] = None):
         super().__init__(config)
         self.reply_text = reply_text
         self.tool_calls = tool_calls
         self.error = error
         self.stream_chunks = stream_chunks
         self.stream_error = stream_error
+        self.replies = list(replies) if replies is not None else None
         self.last_messages: Optional[list[ChatMessage]] = None
+        self.call_count = 0
 
     def chat(self, messages: list[ChatMessage], *, temperature: Optional[float] = None,
              tools: Optional[list[dict[str, Any]]] = None) -> ChatResult:
-        self.last_messages = messages
+        self.last_messages = list(messages)
+        self.call_count += 1
+        if self.replies is not None:
+            if not self.replies:
+                raise AssertionError("FakeProvider.replies 已耗尽(模型被无限调用?)")
+            item = self.replies.pop(0)
+            if isinstance(item, ProviderError):
+                raise item
+            if isinstance(item, ChatResult):
+                return item
+            raise TypeError(f"FakeProvider.replies 元素必须是 ChatResult 或 ProviderError: {type(item)}")
         if self.error is not None:
             raise self.error
-        usage = Usage.estimated(10, self.estimate_tokens(self.reply_text))
+        usage = Usage.estimated_usage(10, self.estimate_tokens(self.reply_text))
         return ChatResult(text=self.reply_text, tool_calls=self.tool_calls,
                           usage=usage, model=self.config.model)
 

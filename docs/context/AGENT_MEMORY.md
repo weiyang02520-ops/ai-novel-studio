@@ -72,6 +72,21 @@ ai-novel-studio/
 - update guards: reviewing/ready 拒绝; origin=ai 拒绝(manual 入口不绕过 AI 边界); user_confirmed 更新后回 draft
 - 不引入 SQLite/WAL/Event Sourcing/事务框架/第三方依赖; 全部 stdlib + 小型文件 transaction helper
 
+## M3 Agent 稳定规则(稳定)
+- **Runtime 只依赖 BaseProvider**: agents/runtime.py 禁止 import httpx/OpenAICompatibleProvider/TransportResponse/SSE; 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ToolCall/Usage)
+- **Chief M3 是只读**: 5 个只读工具白名单(project_info/list_chapters/read_outline/read_character/search_memory); 不注册任何写工具; Chief chat 绝不修改项目文件/新增 history 记录
+- **tool outputs are untrusted DATA**: 工具返回进入 role=tool(绝不拼进 system); 文件内容含注入指令也不改变系统规则; weak-model context pack 是 user-level DATA block([PROJECT_DATA_BEGIN/END])
+- **fact source > derived memory**: FACT_SOURCE(project.json/outline/characters/world/rules/chapters)优先 DERIVED_MEMORY(memory/); 冲突以事实源为准, 可说"派生记忆可能已经过期"
+- **all tools are explicit whitelist**: 未注册工具 → TOOL_NOT_FOUND; Agent 白名单外 → TOOL_PERMISSION_DENIED; 绝不 getattr/eval/exec/shell
+- **tool args strict JSON**: validate_arguments(json object + string/integer/boolean + required + 未知字段拒绝); 坏参数 → INVALID_TOOL_ARGUMENTS 回填给模型修正
+- **per-turn tool limits**: max_tool_calls_per_turn(默认 8)整个 turn 限制, 超限整批 preflight 拒绝(0 执行); max_tool_rounds(Chief=4)轮次上限; runaway 必然终止
+- **weak-model fallback is bounded**: tool_calls=false 时不发 tools, 注入 bounded context pack(硬上限 10000 chars, 顺序: project metadata → chapter state → outline summary → current volume → memory index; 绝不塞 chapters/ 正文)
+- **project chat does not mutate disk**: read-only byte invariant 测试保证
+- **Tool output 截断**: 单次 4000 chars, [TRUNCATED total_chars=N], Unicode-safe
+- **路径安全**: 所有工具路径经 ProjectStore.safe_path(resolve 后必须项目内, 防 ../绝对路径/symlink 逃逸); 错误消息不含绝对路径
+- **Runtime 不依赖 CLI**: agents/ 禁止 argparse/print/input/sys.stdin/sys.stdout; 返回 AgentRunResult 结构化结果
+- **Agent 会话仅内存**: 不落盘; 超限裁剪(保留开头 + 最近, 旧 tool 结果优先剪); system 动态注入不重复
+
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)
 - **OpenAI-compatible first**: 只实现 openai_compatible; 未知 provider → UNSUPPORTED_PROVIDER(不偷偷兼容); 不绑定厂商 SDK(仅 httpx 通用 HTTP)
