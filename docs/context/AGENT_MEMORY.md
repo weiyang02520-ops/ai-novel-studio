@@ -87,6 +87,17 @@ ai-novel-studio/
 - **Runtime 不依赖 CLI**: agents/ 禁止 argparse/print/input/sys.stdin/sys.stdout; 返回 AgentRunResult 结构化结果
 - **Agent 会话仅内存**: 不落盘; 超限裁剪(保留开头 + 最近, 旧 tool 结果优先剪); system 动态注入不重复
 
+## M4 Knowledge Workspace 稳定规则(稳定)
+- **single mutation per LLM batch**: mutation 必须独占 response batch；mutation+read 或多个 mutation 全批 0 execute。
+- **MutationService owns AI writes**: `update_outline/update_character/update_world/save_memory_entry` 的生产写入只能经过统一 mutation layer。
+- **optimistic revision guard**: revision 是原始 bytes SHA256；新建为 `ABSENT`；stale 时拒绝覆盖并要求 re-read。
+- **Snapshot is the only undo mechanism**: 复用 `.history/index.jsonl`，audit 不建第二套数据库；no-op 不产生 snapshot/history。
+- **transaction order**: validate → safe_path → bytes/revision/no-op → prepare_snapshot → atomic write → history commit → final bytes verify；失败 restore/discard；失败的 rollback 报 `ROLLBACK_FAILED`。
+- **FACT_SOURCE hierarchy**: outline/characters/world/rules/confirmed chapters 是事实源；memory 永远是 DERIVED_MEMORY，不能反向自动改正式设定。
+- **Knowledge Doctor is read-only**: 只报告结构事实，不评分、不修复。
+- **ContextCollector shared foundation**: M3 weak fallback 与未来 M5 共用 `core.context`；默认不收集章节正文；动态 Writer budget 仍属 M5。
+- **Writer remains forbidden**: Chief 不拥有 write chapter/confirm/reviewer/delete/shell 权限，M5 未授权。
+
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)
 - **OpenAI-compatible first**: 只实现 openai_compatible; 未知 provider → UNSUPPORTED_PROVIDER(不偷偷兼容); 不绑定厂商 SDK(仅 httpx 通用 HTTP)

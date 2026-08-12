@@ -121,12 +121,16 @@ class Snapshot:
         self._timestamp = _now_iso()
 
     def record(self) -> dict[str, Any]:
-        return {
+        record = {
             "seq": self.seq,
             "operation": self.operation,
             "timestamp": self._timestamp,
             "changes": self.changes,
         }
+        metadata = getattr(self, "_metadata", None)
+        if isinstance(metadata, dict):
+            record["metadata"] = metadata
+        return record
 
     def commit(self) -> dict[str, Any]:
         """把 record 永久写入 index(原子写全量)。失败 → StorageError, index 不变。"""

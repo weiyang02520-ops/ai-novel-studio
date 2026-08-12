@@ -73,12 +73,14 @@ class ToolDef:
     """工具定义(只读工具 read_only=True; M3 全部只读)。"""
 
     def __init__(self, name: str, description: str, parameters: dict[str, Any],
-                 handler: Callable[..., str], *, read_only: bool = True):
+                 handler: Callable[..., str], *, read_only: bool = True,
+                 mutates_project: bool = False):
         self.name = name
         self.description = description
         self.parameters = parameters
         self.handler = handler
         self.read_only = read_only
+        self.mutates_project = mutates_project
 
     def to_schema(self) -> dict[str, Any]:
         """Provider 层工具 schema(内部格式; 不暴露实现细节, 只描述用户语义)。"""

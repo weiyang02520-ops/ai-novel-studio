@@ -62,6 +62,7 @@ class ToolRegistry:
             record.error = "TOOL_NOT_FOUND"
             record.duration_ms = _ms(t0)
             return "TOOL_ERROR: TOOL_NOT_FOUND(工具不存在, 不可执行)", record
+        record.mutates_project = bool(tool.mutates_project)
 
         # 第二道: Agent 白名单权限(§37: 即使注册了写工具, 白名单外也拒绝)
         if name not in agent.tools:
@@ -81,6 +82,13 @@ class ToolRegistry:
             output = tool.handler(ctx, args)
             record.success = True
             record.output_length = len(output)
+            if tool.mutates_project:
+                import re
+                match = re.search(r"diff: \+(\d+)/-(\d+)", output)
+                if match:
+                    record.added_lines, record.removed_lines = map(int, match.groups())
+                if "DIFF_PREVIEW_BEGIN\n" in output:
+                    record.diff_preview = output.split("DIFF_PREVIEW_BEGIN\n", 1)[1].split("\nDIFF_PREVIEW_END", 1)[0]
         except ToolExecutionError as e:
             output = f"TOOL_ERROR: {e}"
             record.error = str(e)
@@ -93,6 +101,23 @@ class ToolRegistry:
 
         record.duration_ms = _ms(t0)
         return truncate_output(output), record
+
+    def preflight_batch(self, agent: Any, calls: list[Any]) -> Optional[str]:
+        """Validate the complete model batch before any handler executes."""
+        mutation_count = 0
+        for call in calls:
+            tool = self._tools.get(call.name)
+            if tool is None:
+                return "TOOL_NOT_FOUND"
+            if call.name not in agent.tools:
+                return "TOOL_PERMISSION_DENIED"
+            _, error = validate_arguments(call.arguments_json, tool.parameters)
+            if error:
+                return error
+            mutation_count += int(tool.mutates_project)
+        if mutation_count and len(calls) != 1:
+            return "MUTATION_BATCH_REJECTED: mutation 必须独占一个 LLM response batch"
+        return None
 
 
 def _ms(t0: float) -> float:

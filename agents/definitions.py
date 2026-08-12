@@ -16,6 +16,11 @@ CHIEF_TOOLS = [
     "search_memory",
 ]
 
+M4_CHIEF_TOOLS = CHIEF_TOOLS + [
+    "read_world", "read_rules", "search_project_knowledge", "inspect_knowledge_status",
+    "update_outline", "update_character", "update_world", "save_memory_entry",
+]
+
 
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
@@ -31,3 +36,11 @@ def chief_agent_def() -> AgentDef:
         max_tool_rounds=4,
         model_role="chief",
     )
+
+
+def m4_chief_agent_def() -> AgentDef:
+    """M4 Chief: knowledge reads/writes, still no chapter mutation or Writer."""
+    agent = chief_agent_def()
+    agent.tools = list(M4_CHIEF_TOOLS)
+    agent.max_tool_rounds = 6
+    return agent

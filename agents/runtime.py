@@ -111,6 +111,20 @@ def run_agent(session: AgentSession, user_text: str) -> AgentRunResult:
             result.rounds = rounds
             return result
 
+        # M4 complete-batch preflight: existence, permission, JSON/schema and
+        # the single-mutation/no-read-with-write rule. Failure means 0 execute.
+        preflight_error = registry.preflight_batch(agent, resp.tool_calls)
+        if preflight_error:
+            rounds += 1
+            session.messages.append(ChatMessage(role="assistant", content="", tool_calls=resp.tool_calls))
+            for call in resp.tool_calls:
+                trace = AgentToolCallRecord(name=call.name, success=False, error=preflight_error)
+                result.tool_trace.append(trace)
+                session.messages.append(ChatMessage(role="tool",
+                    content=f"TOOL_ERROR: {preflight_error}(整批 0 execute)", tool_call_id=call.id))
+            _trim_session(session)
+            continue
+
         rounds += 1
         # assistant tool-call message 必须保留(§25)
         session.messages.append(ChatMessage(role="assistant", content="", tool_calls=resp.tool_calls))

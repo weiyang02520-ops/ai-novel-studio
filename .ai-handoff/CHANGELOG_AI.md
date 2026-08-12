@@ -180,3 +180,31 @@
 - `?? tools/registry.py`
 - `?? tools/types.py`
 
+
+## 2026-08-12 18:50 — Checkpoint
+
+摘要: add 6 new files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M README.md`
+- ` M adapters/cli/m3.py`
+- ` M adapters/cli/main.py`
+- ` M agents/context.py`
+- ` M agents/definitions.py`
+- ` M agents/prompts/chief_system.md`
+- ` M agents/runtime.py`
+- ` M agents/types.py`
+- ` M core/history.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M docs/context/CHATGPT_MEMORY.md`
+- ` M tools/read_tools.py`
+- ` M tools/registry.py`
+- ` M tools/types.py`
+- `?? adapters/cli/m4.py`
+- `?? core/context.py`
+- `?? core/knowledge.py`
+- `?? core/mutation.py`
+- `?? tests/test_m4.py`
+- `?? tools/write_tools.py`
+

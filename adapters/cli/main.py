@@ -173,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--temperature", type=float, default=None, help="覆盖本次请求温度(不写入 settings.json)")
     chat.add_argument("--project", help="项目 ID: 走 Chief 主编(只读工具 + grounded 回答)")
     chat.add_argument("--show-tools", action="store_true", help="主编对话: 显示工具调用 trace(不含工具内容)")
+    chat.add_argument("--show-diff", action="store_true", help="主编对话: 显示成功 mutation 的简短 diff")
 
     # ── usage ──
     usage = sub.add_parser("usage", help="本地 usage 统计")
@@ -228,6 +229,26 @@ def build_parser() -> argparse.ArgumentParser:
     hund.add_argument("project_id")
     hlist = hist_sub.add_parser("list", help="列出历史记录")
     hlist.add_argument("project_id")
+    hshow = hist_sub.add_parser("show", help="显示历史元数据")
+    hshow.add_argument("project_id"); hshow.add_argument("seq", type=int)
+
+    outline = sub.add_parser("outline", help="大纲工作台"); osub = outline.add_subparsers(dest="outline_command")
+    for n in ("list", "status"): x=osub.add_parser(n); x.add_argument("project_id")
+    oshow=osub.add_parser("show"); oshow.add_argument("project_id"); oshow.add_argument("--volume",type=int); oshow.add_argument("--chapter",type=int)
+    for root in ("character", "world"):
+        parser=sub.add_parser(root); ss=parser.add_subparsers(dest="action")
+        x=ss.add_parser("list"); x.add_argument("project_id")
+        x=ss.add_parser("show"); x.add_argument("project_id"); x.add_argument("name")
+        x=ss.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword")
+    memory=sub.add_parser("memory"); ms=memory.add_subparsers(dest="memory_command")
+    x=ms.add_parser("show"); x.add_argument("project_id"); x.add_argument("kind")
+    x=ms.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword")
+    rules=sub.add_parser("rules"); rs=rules.add_subparsers(dest="rules_command"); x=rs.add_parser("show"); x.add_argument("project_id")
+    know=sub.add_parser("knowledge"); ks=know.add_subparsers(dest="knowledge_command")
+    x=ks.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword"); x.add_argument("--include-chapters",action="store_true")
+    for n in ("doctor","revisions"): x=ks.add_parser(n); x.add_argument("project_id")
+    audit=sub.add_parser("audit"); aus=audit.add_subparsers(dest="audit_command"); x=aus.add_parser("mutations"); x.add_argument("project_id")
+    undo=sub.add_parser("undo-last-change"); undo.add_argument("project_id")
 
     return p
 
@@ -329,6 +350,15 @@ def _main(argv: list[str] | None = None) -> int:
             return m1.cmd_history_undo_last(args)
         if args.history_command == "list":
             return m1.cmd_history_list(args)
+        if args.history_command == "show":
+            import adapters.cli.m4 as m4
+            return m4.cmd_history_show(args)
+
+    if args.command in {"outline","character","world","memory","rules","knowledge","audit","undo-last-change"}:
+        import adapters.cli.m4 as m4
+        return {"outline":m4.cmd_outline,"character":m4.cmd_character,"world":m4.cmd_world,
+                "memory":m4.cmd_memory,"rules":m4.cmd_rules,"knowledge":m4.cmd_knowledge,
+                "audit":m4.cmd_audit,"undo-last-change":m4.cmd_undo_alias}[args.command](args)
 
     print(f"未知命令: {args.command}")
     return 1

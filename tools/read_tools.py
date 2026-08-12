@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,6 +33,12 @@ def _read_project_file(ctx: AgentContext, rel: str) -> tuple[str, bool]:
 
 def _fact(rel: str, body: str, extra: str = "") -> str:
     return f"SOURCE: {rel}\nTYPE: FACT_SOURCE\n{extra}{body}"
+
+
+def _fact_file(ctx: AgentContext, rel: str, body: str) -> str:
+    path = ctx.project.store.safe_path(ctx.project.id, rel)
+    revision = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "ABSENT"
+    return _fact(rel, body, f"REVISION_SHA256: {revision}\nCONTENT:\n")
 
 
 # ── project_info(§46-48) ─────────────────────────────────
@@ -90,14 +97,14 @@ def _read_outline(ctx: AgentContext, args: dict[str, Any]) -> str:
         # 无参数: 全书梗概 + 当前卷大纲 + 列出可用文件(§53)
         summary, ok = _read_project_file(ctx, "outline/summary.md")
         if ok:
-            parts.append(_fact("outline/summary.md", summary))
+            parts.append(_fact_file(ctx, "outline/summary.md", summary))
         else:
             parts.append("outline/summary.md 不存在")
 
         cur_vol = ctx.project.metadata.get("current_volume", 1)
         vol_rel = f"outline/volumes/{_volume_filename(int(cur_vol))}"
         vtext, vok = _read_project_file(ctx, vol_rel)
-        parts.append(_fact(vol_rel, vtext) if vok else f"{vol_rel} 不存在")
+        parts.append(_fact_file(ctx, vol_rel, vtext) if vok else f"{vol_rel} 不存在\nREVISION_SHA256: ABSENT")
 
         # 列出可用文件(不读内容)
         pdir = ctx.project.store.project_dir(ctx.project.id)
@@ -112,7 +119,7 @@ def _read_outline(ctx: AgentContext, args: dict[str, Any]) -> str:
         text, ok = _read_project_file(ctx, rel)
         if not ok:
             return f"NOT_FOUND: {rel} 不存在"
-        parts.append(_fact(rel, text))
+        parts.append(_fact_file(ctx, rel, text))
 
     if chapter is not None:
         if not isinstance(chapter, int) or isinstance(chapter, bool) or chapter < 1:
@@ -121,7 +128,7 @@ def _read_outline(ctx: AgentContext, args: dict[str, Any]) -> str:
         text, ok = _read_project_file(ctx, rel)
         if not ok:
             return f"NOT_FOUND: {rel} 不存在"
-        parts.append(_fact(rel, text))
+        parts.append(_fact_file(ctx, rel, text))
 
     return "\n\n".join(parts)
 
@@ -157,7 +164,7 @@ def _read_character(ctx: AgentContext, args: dict[str, Any]) -> str:
         direct = None
     if direct is not None and direct.is_file():
         text, _ = _read_project_file(ctx, safe_rel)
-        return _fact(f"characters/{name}.md", text)
+        return _fact_file(ctx, f"characters/{name}.md", text)
 
     # 第二: H1 标题匹配显示名(§62)
     matches: list[str] = []
@@ -177,9 +184,49 @@ def _read_character(ctx: AgentContext, args: dict[str, Any]) -> str:
     if len(matches) == 1:
         rel = f"characters/{matches[0]}"
         text, _ = _read_project_file(ctx, rel)
-        return _fact(rel, text)
+        return _fact_file(ctx, rel, text)
 
-    return f"NOT_FOUND: 项目正式人物设定(characters/)中未找到 '{name}'"
+    return f"NOT_FOUND: 项目正式人物设定(characters/)中未找到 '{name}'\nREVISION_SHA256: ABSENT"
+
+
+def _read_world(ctx: AgentContext, args: dict[str, Any]) -> str:
+    from core.knowledge import first_h1, safe_markdown_files
+    name = (args.get("name") or "").strip()
+    files = safe_markdown_files(ctx.project, ["world"])
+    if not name:
+        rows = [{"slug": p.stem, "display_name": first_h1(p.read_text(encoding="utf-8")),
+                 "size": p.stat().st_size, "revision": hashlib.sha256(p.read_bytes()).hexdigest()[:12]}
+                for p in files]
+        return _fact("world/", json.dumps(rows, ensure_ascii=False, indent=2))
+    matches = [p for p in files if p.stem == name or first_h1(p.read_text(encoding="utf-8")) == name]
+    if len(matches) > 1:
+        return f"AMBIGUOUS: 多个世界观文件匹配 '{name}'"
+    if not matches:
+        return f"NOT_FOUND: world/ 中未找到 '{name}'\nREVISION_SHA256: ABSENT"
+    rel = matches[0].relative_to(ctx.project.dir).as_posix()
+    return _fact_file(ctx, rel, matches[0].read_text(encoding="utf-8"))
+
+
+def _read_rules(ctx: AgentContext, args: dict[str, Any]) -> str:
+    rel = "rules/writing_rules.md"
+    text, ok = _read_project_file(ctx, rel)
+    return _fact_file(ctx, rel, text) if ok else f"NOT_FOUND: {rel}\nREVISION_SHA256: ABSENT"
+
+
+def _search_project_knowledge(ctx: AgentContext, args: dict[str, Any]) -> str:
+    from core.knowledge import search_knowledge
+    try:
+        hits = search_knowledge(ctx.project, args["keyword"],
+                                include_chapters=bool(args.get("include_chapters", False)),
+                                max_hits=args.get("limit", 20))
+    except ValueError as e:
+        raise ToolExecutionError(f"INVALID_KEYWORD: {e}")
+    return json.dumps(hits, ensure_ascii=False, indent=2)
+
+
+def _inspect_knowledge_status(ctx: AgentContext, args: dict[str, Any]) -> str:
+    from core.knowledge import inspect_knowledge_status
+    return json.dumps(inspect_knowledge_status(ctx.project), ensure_ascii=False, indent=2)
 
 
 # ── search_memory(§66-73) ────────────────────────────────
@@ -235,6 +282,7 @@ def _search_memory(ctx: AgentContext, args: dict[str, Any]) -> str:
                 rel = f.relative_to(pdir).as_posix()
                 hits.append({
                     "relative_path": rel,
+                    "revision": hashlib.sha256(safe.read_bytes()).hexdigest(),
                     "line": i + 1,
                     "snippet": line.strip()[:_MEMORY_SNIPPET_CHARS],
                 })
@@ -301,4 +349,22 @@ def build_readonly_registry() -> Any:
         },
         handler=_search_memory,
     ))
+    return registry
+
+
+def build_chief_registry() -> Any:
+    """M4 production registry: all grounded reads plus four safe mutations."""
+    registry = build_readonly_registry()
+    registry.register(ToolDef("read_world", "列出或读取正式世界观资料；name 省略时列索引。", {
+        "type":"object", "properties":{"name":{"type":"string"}}, "required":[]}, _read_world))
+    registry.register(ToolDef("read_rules", "读取正式写作规则及 revision。", {
+        "type":"object", "properties":{}, "required":[]}, _read_rules))
+    registry.register(ToolDef("search_project_knowledge", "安全搜索大纲、人物、世界观、规则、记忆；默认不搜正文。", {
+        "type":"object", "properties":{"keyword":{"type":"string"},
+        "include_chapters":{"type":"boolean"}, "limit":{"type":"integer"}}, "required":["keyword"]},
+        _search_project_knowledge))
+    registry.register(ToolDef("inspect_knowledge_status", "只报告知识资料存在性和数量，不评分。", {
+        "type":"object", "properties":{}, "required":[]}, _inspect_knowledge_status))
+    from tools.write_tools import register_write_tools
+    register_write_tools(registry)
     return registry

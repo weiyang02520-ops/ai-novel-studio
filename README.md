@@ -9,11 +9,11 @@
 - 管理多本小说的项目结构(大纲/人物/世界观/章节/记忆)
 - 章节本地持久化(纯 Markdown + JSON, 无数据库, 备份 = 拷贝目录)
 - 直接对话: 支持符合 OpenAI Chat Completions 兼容接口的服务(OpenAI / DeepSeek / OpenRouter / Ollama 本地等)
-- 未来: 主编 → Writer → Reviewer 多 Agent 辅助创作(当前未实现 AI Agent)
+- 主编 Agent 可读取并安全修改小说资料；Writer / Reviewer 仍在后续里程碑
 - 所有 AI 调用走你自己的 OpenAI 兼容 API(自定义 Base URL / API Key / Model)
 - 数据 100% 本地保存, 无云同步, 无账号系统
 
-> 当前状态: M3 完成 — 主编 Agent 可读取项目资料并 grounded 回答(只读); 写入资料将在后续里程碑开放。
+> 当前状态: M4 实现完成，等待外部审核。主编可管理大纲、人物、世界观与派生记忆，但仍不能生成或修改章节正文。
 
 ## 安装
 
@@ -113,7 +113,7 @@ python -m adapters.cli config delete-key deepseek-main
 无鉴权本地服务(如 Ollama / 本地 OpenAI-compatible server): `secret_reference` 留空即可,
 请求不发送 Authorization 头(validate 会提示 keyless warning, 属预期)。
 
-### 与主编对话(M3, 项目级 grounded)
+### 与主编对话(M4, grounded + safe editing)
 
 ```bash
 # 直接问项目进度 — 主编会调用真实项目工具(list_chapters)后回答
@@ -124,13 +124,39 @@ python -m adapters.cli chat "第一卷大纲现在有哪些章节？" --project 
 
 # 显示工具调用 trace(不显示工具内容)
 python -m adapters.cli chat "进度?" --project my-novel --show-tools
+
+# 明确要求时，主编会先读 revision、写入、再读取复核
+python -m adapters.cli chat "把第一卷目标改成找到北门钥匙。" --project my-novel --show-tools --show-diff
 ```
 
-- **主编是只读的**: 通过项目工具读取 项目/章节/大纲/人物/派生记忆, 不会修改任何小说文件; 写入资料将在后续里程碑开放。
+- **安全写入**: 只有明确的修改请求才写；现有文档必须先读，写入携带 raw-byte SHA256 revision。外部修改会触发 `STALE_REVISION`，不会被覆盖。
+- **可撤销**: 每次成功 AI mutation 使用 `.history/` 快照，可用 `undo-last-change` 回滚。快照显著降低误写风险，但不承诺绝对不会丢失数据，重要项目仍应独立备份。
 - **Grounding**: 主编不猜 — 涉及项目具体事实的问题必须先调用工具读取真实数据; 数据里没有 → 明确说"项目资料中没有找到"。事实源(project.json/大纲/人物/正文)优先于派生记忆(memory/)。
 - **两种 chat 模式**: `chat "你好"`(无 `--project`)= M2 raw Provider 对话(诊断用);`chat "..." --project X` = 主编项目对话。
 - **弱模型支持**: 模型配置 `tool_calls=false` 时, 不发送工具调用, 改为注入有限的项目数据包(有硬上限, 不塞全书正文)。
 - 主编回答不自动保存; 多轮对话仅内存(关闭进程即消失)。
+
+### 知识工作台与审计
+
+```bash
+python -m adapters.cli outline list my-novel
+python -m adapters.cli outline show my-novel --volume 1
+python -m adapters.cli outline status my-novel
+python -m adapters.cli character list my-novel
+python -m adapters.cli character search my-novel 林小满
+python -m adapters.cli world show my-novel 北门
+python -m adapters.cli memory search my-novel 钥匙
+python -m adapters.cli rules show my-novel
+python -m adapters.cli knowledge search my-novel 北门
+python -m adapters.cli knowledge doctor my-novel
+python -m adapters.cli knowledge revisions my-novel
+python -m adapters.cli history list my-novel
+python -m adapters.cli history show my-novel 1
+python -m adapters.cli audit mutations my-novel
+python -m adapters.cli undo-last-change my-novel
+```
+
+`knowledge doctor` 只报告重复 H1、history 损坏、章节冲突和 symlink escape 等事实，不会修复或改写项目。
 
 ### 角色模型 profile(可选)
 
@@ -168,8 +194,8 @@ data/novels/<project_id>/
 
 ## 当前尚未实现
 
-- 主编/Writer/Reviewer Agent(带工具执行)— 主编只读已实现(M3); 写入工具 M4+
-- 大纲/人物/世界观的 AI 辅助编辑(写入)
+- Writer / Reviewer Agent 与章节正文生成（M5+，尚未授权）
+- 动态 ContextBudget、自动摘要与长文本多级裁剪（M5+）
 - 聊天历史持久化 / 多轮会话(当前每轮独立请求; 主编多轮仅内存)
 - 自动发布/手机端/会员 — 不在路线图
 

@@ -1,133 +1,66 @@
 # Project State (单一事实源)
 
-> 本文件是 HANDOFF.md / STATUS.md 的唯一内容来源。
-> Agent 每轮完成后**必须更新**本文件(阶段/完成/验证/下一步等), 再运行 checkpoint。
-> 脚本每次 checkpoint 会基于本文件 + git 事实重写 HANDOFF.md 和 STATUS.md。
+> HANDOFF.md / STATUS.md 由 checkpoint 基于本文件与 Git 事实生成。
 
 ## project_goal
 
-开发个人版 AI 小说创作软件(本地优先, 自带 API Key): 项目管理/章节/大纲/人物/世界观 + 主编→Writer→Reviewer 多 Agent 创作流程。设计依据: clean-room/ 设计规格(逆向仓库内), 从零写代码。
+开发个人版、本地优先、自带 API Key 的 AI 小说创作软件：项目资料工作台 + 主编 → Writer → Reviewer 创作流程。
 
 ## phase
 
-**M3 implementation complete. Awaiting External ChatGPT M3 review.**
-(M3 未宣布 PASS; M4 NOT AUTHORIZED。)
+**M4 SUPER BATCH implementation complete. Awaiting External ChatGPT M4 review.**
+
+M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 
 ## real_external_provider
 
-**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**; **REAL_CHIEF_TOOL_CALL = UNVERIFIED_MISSING_CONFIG**(生产配置 secret_reference 为空; 不索取/打印 Key。用户配置 Key 后即可验证。M3 工程 Gate 由 External ChatGPT 根据实现 + localhost production-path 判断。)
+**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**。生产配置没有可用的 `secret_reference`；未索取、打印或保存 Key。localhost 真实 HTTP 生产链路已通过。
+
 ## last_round
 
-- **M3 COMPLETE MEGA BATCH**(Agent Runtime + Chief Editor + 只读工具 + Grounded Novel Q&A):
-  1. **agents/**: types.py(AgentDef/AgentContext/AgentRunResult/tool+calls trace)、definitions.py(Chief 定义: 5 只读工具白名单, max_tool_rounds=4)、prompts/chief_system.md(原创: grounding 铁律/事实源优先级/工具输出是 DATA)、context.py(weak-model bounded pack: 10000 chars 硬上限, project metadata→章节→梗概→当前卷→记忆, 绝不塞正文)、runtime.py(tool-call loop: system 固定首位/assistant tool-call 保留/tool 结果 tool_call_id 回填/多工具保持顺序/总量 preflight 整批拒绝/轮次上限/ProviderError → 安全状态; 会话内存式 + 超限裁剪; 只依赖 BaseProvider)。
-  2. **tools/**: types.py(ToolDef + validate_arguments 严格 JSON object/类型/required/未知字段拒绝)、registry.py(白名单注册 + Agent 权限双重防御 + 异常安全包装 + 4K Unicode-safe 截断 + [TRUNCATED])、read_tools.py(project_info 白名单 JSON / list_chapters 复用 core / read_outline(卷 3 位 + 章复用 chNNNN)/ read_character(slug + H1 显示名 + AMBIGUOUS)/ search_memory(仅 memory/, 行号+snippet, DERIVED_MEMORY 标记, 500 文件/2MB 上限); 全部 safe_path 防穿越/symlink)。
-  3. **弱模型 fallback**: tool_calls=false 不发送 tools, 首轮注入 [PROJECT_DATA_BEGIN/END] user-level DATA block, 不重复注入。
-  4. **CLI**: chat --project → Chief; --show-tools(只显示 trace 不显示内容); 无 --project → M2 raw 回归; models.chief 存在则用否则 default_model 回退; provider.close 全路径 finally; 每次 LLM call 记录 usage(仅 metadata)。
-  5. **测试**: tools 36(runtime 19 + tools 35+1skip + m3_cli 11)新增; localhost mock tool-loop 生产路径(真实 HttpTransport → 两请求: 带 tools → tool 回填 → grounded 回答; 断言第二次请求含 role=tool + tool_call_id); read-only hash invariant; secret 不泄漏。
+- 新增统一 `core.mutation.MutationService`：raw-byte SHA256 revision、ABSENT create guard、stale/no-op/empty/NUL/size 校验、snapshot → atomic write → history commit → byte verify、失败 restore/discard、ROLLBACK_FAILED 诚实高严重度错误。
+- 所有 AI 资料写入集中在四个 Chief 工具：`update_outline` / `update_character` / `update_world` / `save_memory_entry`；人物和世界观支持 H1 查找、确定性中文 hash slug、collision/ambiguity 防护、create 自动 H1。
+- `ToolDef.mutates_project` + runtime 全批 preflight：mutation 必须单独一批；mutation+read 或多个 mutation 均 0 execute；弱模型写请求安全阻断。
+- revision-aware reads、简短 unified diff、`--show-diff`、history show、AI mutation audit、`undo-last-change`。
+- 知识工作台 CLI：outline/character/world/memory/rules/knowledge search；doctor 只读诊断；revisions 与内存 fact-source manifest。
+- 共享 `ContextItem` / `collect_project_context` / bounded renderer；M3 weak fallback 已复用，默认不读取章节正文。
+- Chief Prompt 已升级为 read-before-write、FACT_SOURCE > DERIVED_MEMORY、stale re-read、mutation 后 re-read；仍禁止 Writer/Reviewer/正文写入/删除/shell。
+
 ## verified
 
-- 单元测试 **450/450 PASS**(M3 新增 65: tools 35+1skip(symlink 权限) / runtime 19 / m3_cli 11)。
-- Acceptance(A-K, 真实 CLI + localhost mock): A project_info PASS / B list_chapters PASS / C read_outline PASS / D read_character PASS / E search_memory PASS / F multi-round PASS / G weak fallback PASS / H runaway limit PASS / I read-only hash invariant PASS(22 文件字节一致)/ J localhost real HTTP tool-loop PASS(两请求: 带 tools schema → role=tool 回填 → grounded 回答"第 3 章")/ K real external UNVERIFIED_MISSING_CONFIG。
-- Secret 安全: Chief 路径 401/tool error/round limit/local mock → stdout/stderr/usage 均无 fake key PASS。
-- M0 regression: 66/66 PASS; M1 regression PASS; M2 regression(raw chat/stream/URLs/close/usage/test-provider)PASS。
-- Windows Credential Manager: REAL_ENV_CONFIRMED(前轮)。
+- `python -m pytest tests/ -v`: **464 passed, 1 skipped, 0 failed**。
+- Local HTTP E2E：CLI → create_provider → OpenAICompatibleProvider → HttpTransport → Chief → Registry → MutationService → filesystem/history，四轮 read → update → read → final PASS；undo 原字节恢复 PASS。
+- Mutation：create/update/undo/stale/no-op/empty/NUL/limit/write failure/post-write verify/history commit rollback/rollback failure PASS。
+- Character/World/Memory create/update/append/undo 与 stable slug/H1 PASS。
+- Batch rejection、weak-model read regression/write block、M0/M1/M2/M3 regressions PASS。
+- Knowledge search/doctor/revisions、ContextCollector priority/bounding/no chapter dump PASS。
+- Real external: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
 
 ## architecture
 
-```
-ai-novel-studio/
-├── core/          # Core Engine(无 UI 依赖)
-│   ├── config.py      # 配置系统(SUPPORTED_PROVIDERS + 离线 validate)
-│   ├── storage.py     # 原子写 + 路径安全 + ProjectStore
-│   ├── project.py     # 项目 CRUD + 目录骨架 + ID 安全
-│   ├── chapter.py     # 章节 frontmatter + 状态机 + confirm
-│   └── history.py     # Snapshot(prepare/commit/discard/restore) + undo-last
-├── agents/        # Agent 层(无 UI 依赖)
-│   ├── types.py           # AgentDef/AgentContext/AgentRunResult
-│   ├── definitions.py     # Chief 定义(5 只读工具白名单)
-│   ├── runtime.py         # tool-call loop + AgentSession(内存)
-│   ├── context.py         # weak-model bounded context pack
-│   └── prompts/chief_system.md
-├── tools/         # 工具系统(无 UI 依赖)
-│   ├── types.py           # ToolDef + 严格 JSON 参数校验
-│   ├── registry.py        # 白名单/权限/截断
-│   └── read_tools.py      # 5 只读工具(全部 READ-ONLY)
-├── llm/           # Provider 层(无 UI 依赖)
-│   ├── secret_store.py / types.py / provider.py / transport.py
-│   ├── openai_compatible.py / factory.py / usage.py / testing.py
-├── adapters/cli/  # CLI(main.py + commands.py + m2.py + m3.py)
-├── config/        # settings.json(非敏感; 不入 Git)
-├── data/          # 运行数据: novels/ + logs/usage.jsonl(不入 Git)
-├── docs/context/  # 长期记忆
-├── tests/         # M0(66) + M1(110) + M2(209) + M3(65)
-└── scripts/       # ai_checkpoint.py + m2/m3_demo_mock.py(本地演示)
-```
-## unverified
+- `core/mutation.py`: AI 写事务唯一入口；现有 Snapshot 是唯一 undo 机制。
+- `core/knowledge.py`: 只读索引、搜索、doctor、revision、fact manifest。
+- `core/context.py`: M4/M5 共用上下文来源层，不含动态 Writer budget。
+- `tools/write_tools.py`: 四个 M4 mutation tools；不接受任意磁盘 path。
+- `tools/read_tools.py`: M3 reads + M4 world/rules/search/status reads。
+- `adapters/cli/m4.py`: 知识工作台、诊断、audit、undo CLI。
 
-- 真实外部 Provider 成功调用 + 真实 Chief tool_call(生产配置缺 secret_reference; 用户配置 Key 后可验证)。
-- AI Agent 写入(M4: update_outline/update_character/update_world/save_memory_entry)未实现。
-- Writer/Reviewer Agent、写章节草稿(M5/M6)未实现。
+## stable_decisions
+
+- single mutation per LLM response batch；任何 mutation 与 read 同批也拒绝。
+- optimistic revision guard 使用原始 bytes SHA256；create 使用 ABSENT。
+- Snapshot/history 是唯一 undo 数据，不建立第二套 audit 数据库。
+- FACT_SOURCE 永远高于 DERIVED_MEMORY；memory 不能反向覆盖正式设定。
+- Knowledge Doctor 永远只读。
+- ContextCollector 是 Chief fallback 与未来 Writer 的共享基础，但 M5 动态预算未实现。
+- Writer 与 `write_chapter_draft` 仍禁止成为 Chief 生产工具。
 
 ## known_issues
 
-- **GitHub 仓库当前可见性为 public**(API 实测, 创建时曾为 private) — 若需私有请用户在 GitHub 网页端修改, 我未擅自改动。这是事实记录, 不是开发任务。
-- Linux headless 无凭据服务时, SecretStore 写入会明确报错(BACKEND_UNAVAILABLE)并建议环境变量(设计如此, 不降级明文)。
+- GitHub 仓库可见性此前实测为 public；未擅自变更。
+- Linux headless 无凭据服务时 SecretStore 明确报 BACKEND_UNAVAILABLE，不降级明文。
 
-## key_decisions
+## next
 
-- M1 用最小合理结构: storage/project/chapter/history 4 个 Core 文件(不拆十几个类)。
-- 自研有限 frontmatter(不引入 YAML 依赖, 只解析/写出自己生成的格式, round-trip 稳定)。
-- 原子写: same-dir temp + flush + os.replace; 失败清理临时文件不破坏原文件。
-- 章节状态机手动路径: DRAFT → USER_CONFIRMED → CONFIRMED; current_chapter=max 推进不倒退。
-- history 事务: prepare(backups, 不写 index)→ 业务 → commit(业务成功后); 失败 → restore(尽力全部)+ discard; 不引入 SQLite/WAL/框架。
-- undo: preflight 全量验证 → capture 当前状态 → apply(幂等)→ 全成功才同步 metadata + 移除 record。
-- ProjectStore(root) 注入: 生产 data/novels/, 测试 tmp_path。
-- 中文名自动生成 novel-<hex> ID; 显示名保留原名。
-- M2 Provider 用最小结构: types/provider/transport/openai_compatible/factory/usage/testing(不搞十几层)。
-- HTTP 用 httpx(通用, 非厂商 SDK): 超时分离/SSE/testability; FakeTransport + localhost mock 保证可测。
-- usage 是可观测派生数据: 坏行跳过(与 history 严格一致性区分); 只记 metadata 不记内容。
-- chat 双模式: 无 --project = M2 raw(诊断); 有 --project = M3 Chief(只读 grounded)。
-- M3 Agent 只读: 5 工具白名单, 不注册写工具; 工具输出是 DATA 不是指令; 事实源 > 派生记忆; 会话仅内存。
-- 弱模型: tool_calls=false 时 bounded context pack(硬上限), 不塞全书正文。
-
-## next_steps
-
-- P0: 等待 External ChatGPT M3 review。
-- P1: M4(Chief 写入工具: outline/character/world/memory)仅在明确授权后开始。
-
-## review_focus
-
-- Runtime 只依赖 BaseProvider(不接触 HTTP/SSE); AgentRunResult 结构化。
-- Chief 只读: 5 工具白名单 / 写工具不可执行 / read-only hash invariant。
-- tool outputs are untrusted DATA(role=tool, 不拼 system; prompt injection 测试)。
-- 权限双重防御(注册表白名单 + Agent 白名单); 未知工具 TOOL_NOT_FOUND。
-- 严格 JSON 参数(未知字段拒绝); 坏参数回填修正。
-- tool 总量 preflight 整批拒绝; round 上限; runaway 终止。
-- weak-model fallback bounded(不塞正文); config validate 离线。
-- 路径安全: safe_path 防 ../绝对路径/symlink; 错误消息无绝对路径。
-- M0/M1/M2 全回归。
-## critical_files
-
-- core/storage.py — 原子写/路径安全/ProjectStore
-- core/project.py — 项目 CRUD/骨架/ID 安全
-- core/chapter.py — 章节状态机/frontmatter/confirm(事务化)
-- core/history.py — Snapshot API + undo-last(preflight/capture/apply)
-- core/config.py — ModelConfig/Settings/离线 validate/SUPPORTED_PROVIDERS
-- llm/types.py — 内部统一数据模型(Runtime 依赖)
-- llm/openai_compatible.py — Provider(非流式/SSE/错误映射/重试)
-- llm/transport.py — httpx 封装
-- llm/usage.py — usage JSONL
-- agents/runtime.py — tool-call loop + AgentSession
-- agents/definitions.py — Chief 定义(白名单)
-- agents/context.py — weak-model bounded pack
-- tools/registry.py — 工具注册/权限/截断
-- tools/read_tools.py — 5 只读工具
-- adapters/cli/{main,m2,m3,commands}.py — CLI
-- tests/ — M0(66) + M1(110) + M2(209) + M3(65)
-
-## recent_changes
-
-- M3 COMPLETE: Agent Runtime + Chief(只读 grounded)+ 5 工具 + weak-model fallback, 450/450 测试通过, Acceptance A-K PASS(详见 last_round)。
-- M2 FINAL CLOSEOUT: URL 安全四入口强制 + ToolCall delta 契约 + HttpTransport.close, 385/385 测试通过。
-- M2 COMPLETE: Provider 链路 + chat 流式 + config test-provider + usage, 314/314 测试通过, Acceptance A-I PASS。
-- M1 TRANSACTION CLOSEOUT: undo all-or-nothing + confirm 无幽灵 history, 176/176 测试通过。
+- P0: External ChatGPT M4 review。
+- P1: M5 Writer Agent + chapter generation + dynamic ContextBudget；**NOT AUTHORIZED**。

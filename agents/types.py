@@ -47,6 +47,10 @@ class AgentToolCallRecord:
     error: Optional[str] = None
     duration_ms: Optional[float] = None
     output_length: Optional[int] = None
+    mutates_project: bool = False
+    added_lines: Optional[int] = None
+    removed_lines: Optional[int] = None
+    diff_preview: Optional[str] = None
 
 
 @dataclasses.dataclass

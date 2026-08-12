@@ -34,6 +34,21 @@ def _read_limited(ctx: AgentContext, rel: str, limit: int) -> tuple[str, bool]:
 
 def build_fallback_context(ctx: AgentContext) -> str:
     """按优先级组装 bounded context pack。"""
+    # M4 shares the same source collector with the future Writer. Rendering is
+    # still a user-level DATA block and remains strictly bounded/no chapter text.
+    from core.context import ContextItem, collect_project_context, collect_recent_chapter_metadata, render_context_items
+    from llm.provider import BaseProvider
+    items = collect_project_context(ctx.project,
+        current_volume=int(ctx.project.metadata.get("current_volume", 1) or 1),
+        include_memory=True)
+    chapter_text = json.dumps(collect_recent_chapter_metadata(ctx.project), ensure_ascii=False, indent=2)
+    items.append(ContextItem("chapters/ + drafts/", "PROJECT", 80, chapter_text,
+                             len(chapter_text), BaseProvider.estimate_tokens(chapter_text)))
+    return render_context_items(items, FALLBACK_BUDGET_CHARS)
+
+
+def _legacy_build_fallback_context(ctx: AgentContext) -> str:
+    """Pre-M4 implementation retained as a readable compatibility reference."""
     p = ctx.project
     m = p.metadata
     budget = FALLBACK_BUDGET_CHARS

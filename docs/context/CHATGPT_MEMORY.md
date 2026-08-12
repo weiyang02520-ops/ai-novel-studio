@@ -37,3 +37,9 @@ DRAFT → USER_CONFIRMED → CONFIRMED(手动章节); AI 章节(M5)必须 DRAFT 
 
 ## [PROCESS] Checkpoint 规则
 `.ai-handoff/PROJECT_STATE.md` 是单一事实源; `scripts/ai_checkpoint.py` 每次强制重写 HANDOFF/STATUS, 安全扫描(NUL 枚举 fail-closed + 路径拦截 + 二进制阻止 + 分块扫描)通过后才 commit/push。
+
+## [DESIGN_DECISION] M4 安全资料编辑
+Chief 对大纲、人物、世界观、派生记忆的 AI 写入统一经过 MutationService。每个 LLM batch 最多一个 mutation；原始 bytes SHA256 乐观锁防覆盖；现有 Snapshot/history 是唯一 undo/audit 数据源；no-op 不留历史。
+
+## [DESIGN_DECISION] Knowledge 与 Context 基础
+Knowledge Doctor 只读且不评分。FACT_SOURCE 高于 DERIVED_MEMORY。ContextCollector 是 M3 weak fallback 与未来 M5 Writer 共用的资料来源层；M4 不包含动态 Writer budget，也不生成章节正文。
