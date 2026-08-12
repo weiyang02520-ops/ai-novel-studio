@@ -9,11 +9,11 @@ from typing import Any
 
 from agents.types import AgentContext
 from core.knowledge import first_h1, safe_markdown_files
+from core.memory import MEMORY_KINDS, memory_target_for_kind
 from core.mutation import ABSENT, MutationError, MutationRequest, MutationService
 from tools.types import ToolDef, ToolExecutionError
 
 SLUG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
-MEMORY_KINDS = {"long_term", "timeline", "characters", "world", "index", "foreshadowing"}
 
 
 def stable_slug(prefix: str, name: str) -> str:
@@ -57,6 +57,8 @@ def _resolve_named(ctx: AgentContext, root: str, name: str, slug: str | None,
 
 
 def _format_result(result) -> str:
+    if not result.changed:
+        return f"NO_CHANGE\ntarget: {result.target}\nrevision: {result.old_revision}"
     d = result.diff
     return (f"WRITE_OK\ntarget: {result.target}\nrevision: {result.old_revision} -> {result.new_revision}\n"
             f"history_seq: {result.history_seq}\ndiff: +{d.added_lines}/-{d.removed_lines}\n"
@@ -95,7 +97,12 @@ def _update_named(ctx: AgentContext, args: dict[str, Any], root: str, prefix: st
     if exists and args["expected_revision"] == ABSENT:
         raise ToolExecutionError("STALE_REVISION: 目标已存在")
     text = args["text"]
-    if not exists and not first_h1(text):
+    if exists:
+        path = ctx.project.store.safe_path(ctx.project.id, f"{root}/{slug}.md")
+        current_h1, new_h1 = first_h1(path.read_text(encoding="utf-8")), first_h1(text)
+        if not new_h1 or new_h1 != current_h1:
+            raise ToolExecutionError(f"IDENTITY_MISMATCH: existing H1 {current_h1!r} 必须保持不变")
+    elif not first_h1(text):
         text = f"# {args['name'].strip()}\n\n{text.lstrip()}"
     return _mutate(ctx, operation=f"ai.update_{kind}", rel=f"{root}/{slug}.md", text=text,
                    expected=args["expected_revision"], kind=kind)
@@ -115,7 +122,7 @@ def _save_memory(ctx: AgentContext, args: dict[str, Any]) -> str:
         raise ToolExecutionError("INVALID_MEMORY_KIND")
     if len(args["text"]) > 50_000:
         raise ToolExecutionError("CONTENT_TOO_LARGE: memory entry 超过 50000 字符")
-    rel = "memory/foreshadowing/index.md" if kind == "foreshadowing" else f"memory/{kind}.md"
+    rel = memory_target_for_kind(kind)
     path = ctx.project.store.safe_path(ctx.project.id, rel)
     old = path.read_text(encoding="utf-8") if path.is_file() else ""
     if args["text"].strip() and args["text"].strip() in old:

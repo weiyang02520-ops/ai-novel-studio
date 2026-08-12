@@ -10,11 +10,19 @@
 
 ## 2. 当前阶段
 
-**M4 SUPER BATCH implementation complete. Awaiting External ChatGPT M4 review.**
+**M4 FINAL HARDENING complete. Awaiting External ChatGPT final M4 review.**
 
 M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 
 ## 3. 本轮完成内容
+
+- FINAL HARDENING：统一 Agent/CLI/context/doctor 安全读取边界；项目外 symlink 不读取。
+- 新增 `read_memory` 与共享 memory kind→target/revision contract。
+- Mutation snapshot 后 writer 前立即字节 recheck；race 只 discard，不 restore 外部内容。
+- 所有 project Chief chat 统一完整 M4 registry；删除关键词 capability routing；弱模型显式只读。
+- Doctor 复用 project validate，并补 UTF-8、缺失资料、symlink、JSON UX。
+- ContextCollector 补 named world 与显式 bounded recent confirmed chapters；默认仍无正文。
+- Character/world H1 identity guard；no-op 正常返回且 0 history；history metadata 正式 optional dict。
 
 - 新增统一 `core.mutation.MutationService`：raw-byte SHA256 revision、ABSENT create guard、stale/no-op/empty/NUL/size 校验、snapshot → atomic write → history commit → byte verify、失败 restore/discard、ROLLBACK_FAILED 诚实高严重度错误。
 - 所有 AI 资料写入集中在四个 Chief 工具：`update_outline` / `update_character` / `update_world` / `save_memory_entry`；人物和世界观支持 H1 查找、确定性中文 hash slug、collision/ambiguity 防护、create 自动 H1。
@@ -30,28 +38,30 @@ M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 - ` M .ai-handoff/PROJECT_STATE.md`
 - ` M README.md`
 - ` M adapters/cli/m3.py`
+- ` M adapters/cli/m4.py`
 - ` M adapters/cli/main.py`
 - ` M agents/context.py`
 - ` M agents/definitions.py`
 - ` M agents/prompts/chief_system.md`
-- ` M agents/runtime.py`
-- ` M agents/types.py`
+- ` M core/chapter.py`
+- ` M core/context.py`
 - ` M core/history.py`
+- ` M core/knowledge.py`
+- ` M core/mutation.py`
+- ` M core/project.py`
 - ` M docs/context/AGENT_MEMORY.md`
 - ` M docs/context/CHATGPT_MEMORY.md`
+- ` M tests/test_m3_cli.py`
+- ` M tests/test_m4.py`
 - ` M tools/read_tools.py`
-- ` M tools/registry.py`
-- ` M tools/types.py`
-- `?? adapters/cli/m4.py`
-- `?? core/context.py`
-- `?? core/knowledge.py`
-- `?? core/mutation.py`
-- `?? tests/test_m4.py`
-- `?? tools/write_tools.py`
+- ` M tools/write_tools.py`
+- `?? core/memory.py`
+- `?? docs/context/M5_READINESS.md`
+- `?? tests/test_m4_hardening.py`
 
 ## 5. 已验证结果
 
-- `python -m pytest tests/ -v`: **464 passed, 1 skipped, 0 failed**。
+- `python -m pytest tests/ -v`: **484 passed, 5 skipped, 0 failed**（Windows 无 symlink 权限用例明确 skip）。
 - Local HTTP E2E：CLI → create_provider → OpenAICompatibleProvider → HttpTransport → Chief → Registry → MutationService → filesystem/history，四轮 read → update → read → final PASS；undo 原字节恢复 PASS。
 - Mutation：create/update/undo/stale/no-op/empty/NUL/limit/write failure/post-write verify/history commit rollback/rollback failure PASS。
 - Character/World/Memory create/update/append/undo 与 stable slug/H1 PASS。
@@ -92,11 +102,11 @@ M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: 678da5be0fce ai-checkpoint: add 13 new files
+- checkpoint_base_commit: 7f0e27148d54 ai-checkpoint: add 6 new files
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): 678da5b 2026-08-12 18:01:55 +0800
-- 时间: 2026-08-12 18:50
+- 最近 commit(本文件生成时): 7f0e271 2026-08-12 18:50:07 +0800
+- 时间: 2026-08-12 19:33
 
 ## 13. Critical Files
 

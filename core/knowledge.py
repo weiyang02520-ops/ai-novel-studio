@@ -51,7 +51,8 @@ def collect_fact_source_manifest(project: Project) -> list[dict[str, Any]]:
 
 
 def knowledge_revisions(project: Project) -> list[dict[str, Any]]:
-    return [{"relative_path": item["relative_path"], "sha256": item["sha256"], "size": item["size"]}
+    return [{"relative_path": item["relative_path"], "sha256": item["sha256"], "size": item["size"],
+             "type": "FACT_SOURCE"}
             for item in collect_fact_source_manifest(project)]
 
 
@@ -102,38 +103,56 @@ def inspect_knowledge_status(project: Project) -> dict[str, Any]:
 
 def doctor(project: Project) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
+    def add(severity: str, code: str, message: str) -> None:
+        issues.append({"severity": severity, "code": code, "message": message})
+    # Reuse canonical project/chapter integrity checks.
+    try:
+        from .project import validate_project
+        for message in validate_project(project.store, project.id):
+            add("ERROR", "PROJECT_INTEGRITY", message)
+    except Exception as e:
+        add("ERROR", "PROJECT_METADATA", str(e))
     # Force strict history parsing; no repair is performed.
     try:
         from .history import list_history
         list_history(project)
     except Exception as e:
-        issues.append({"severity": "ERROR", "code": "BROKEN_HISTORY", "message": str(e)})
-    chapters = list_chapters(project)
-    for c in chapters:
-        if c.get("conflict"):
-            issues.append({"severity": "ERROR", "code": "CHAPTER_CONFLICT",
-                           "message": f"第 {c.get('chapter')} 章 draft/confirmed 冲突"})
+        add("ERROR", "BROKEN_HISTORY", str(e))
+    cur_v = int(project.metadata.get("current_volume", 1) or 1)
+    if not project.store.safe_path(project.id, f"outline/volumes/vol{cur_v:03d}.md").is_file():
+        add("WARNING", "MISSING_CURRENT_VOLUME_OUTLINE", f"缺少当前卷 vol{cur_v:03d}.md")
+    for rel, code in (("outline/summary.md", "MISSING_OUTLINE_SUMMARY"),
+                      ("rules/writing_rules.md", "MISSING_WRITING_RULES")):
+        if not project.store.safe_path(project.id, rel).is_file():
+            add("WARNING", code, f"缺少 {rel}")
     for root, code in (("characters", "DUPLICATE_CHARACTER_H1"), ("world", "DUPLICATE_WORLD_H1")):
         titles: dict[str, list[str]] = {}
         for path in safe_markdown_files(project, [root]):
             try:
                 title = first_h1(path.read_text(encoding="utf-8"))
-            except Exception:
+            except UnicodeError:
+                add("ERROR", "INVALID_UTF8", path.relative_to(project.dir).as_posix())
                 continue
             if title:
                 titles.setdefault(title, []).append(path.name)
         for title, names in titles.items():
             if len(names) > 1:
-                issues.append({"severity": "ERROR", "code": code,
-                               "message": f"重复 H1 {title!r}: {', '.join(names)}"})
+                add("ERROR", code, f"重复 H1 {title!r}: {', '.join(names)}")
+    # Decode every safe markdown source; memory is derived but corruption is visible.
+    for path in safe_markdown_files(project, SEARCH_ROOTS):
+        try:
+            path.read_text(encoding="utf-8")
+        except UnicodeError:
+            rel = path.relative_to(project.dir).as_posix()
+            add("WARNING" if rel.startswith("memory/") else "ERROR", "INVALID_UTF8", rel)
     # Explicitly report symlinks that cannot stay inside the project.
     for path in project.dir.rglob("*"):
         if path.is_symlink():
             try:
-                if not path.resolve().is_relative_to(project.dir.resolve()):
-                    issues.append({"severity": "ERROR", "code": "SYMLINK_ESCAPE",
-                                   "message": path.relative_to(project.dir).as_posix()})
+                if not path.exists():
+                    add("ERROR", "BROKEN_SYMLINK", path.relative_to(project.dir).as_posix())
+                elif not path.resolve().is_relative_to(project.dir.resolve()):
+                    add("ERROR", "SYMLINK_ESCAPE", path.relative_to(project.dir).as_posix())
             except OSError:
-                issues.append({"severity": "ERROR", "code": "BROKEN_SYMLINK", "message": str(path.name)})
+                add("ERROR", "BROKEN_SYMLINK", str(path.name))
     return issues
-

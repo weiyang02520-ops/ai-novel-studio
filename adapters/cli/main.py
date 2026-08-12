@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     hlist = hist_sub.add_parser("list", help="列出历史记录")
     hlist.add_argument("project_id")
     hshow = hist_sub.add_parser("show", help="显示历史元数据")
-    hshow.add_argument("project_id"); hshow.add_argument("seq", type=int)
+    hshow.add_argument("project_id"); hshow.add_argument("seq", type=int); hshow.add_argument("--show-diff",action="store_true")
 
     outline = sub.add_parser("outline", help="大纲工作台"); osub = outline.add_subparsers(dest="outline_command")
     for n in ("list", "status"): x=osub.add_parser(n); x.add_argument("project_id")
@@ -245,8 +245,9 @@ def build_parser() -> argparse.ArgumentParser:
     x=ms.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword")
     rules=sub.add_parser("rules"); rs=rules.add_subparsers(dest="rules_command"); x=rs.add_parser("show"); x.add_argument("project_id")
     know=sub.add_parser("knowledge"); ks=know.add_subparsers(dest="knowledge_command")
-    x=ks.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword"); x.add_argument("--include-chapters",action="store_true")
-    for n in ("doctor","revisions"): x=ks.add_parser(n); x.add_argument("project_id")
+    x=ks.add_parser("search"); x.add_argument("project_id"); x.add_argument("keyword"); x.add_argument("--include-chapters",action="store_true"); x.add_argument("--limit",type=int,default=50)
+    x=ks.add_parser("doctor"); x.add_argument("project_id"); x.add_argument("--json",action="store_true")
+    x=ks.add_parser("revisions"); x.add_argument("project_id")
     audit=sub.add_parser("audit"); aus=audit.add_subparsers(dest="audit_command"); x=aus.add_parser("mutations"); x.add_argument("project_id")
     undo=sub.add_parser("undo-last-change"); undo.add_argument("project_id")
 

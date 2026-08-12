@@ -49,6 +49,8 @@ def _validate_record(rec: dict[str, Any], line: str) -> None:
     changes = rec.get("changes")
     if not isinstance(changes, list) or not changes:
         raise DataIntegrityError(f"history 记录 changes 非法: {changes!r}")
+    if rec.get("metadata") is not None and not isinstance(rec.get("metadata"), dict):
+        raise DataIntegrityError("history metadata 必须是 object")
     for ch in changes:
         if not isinstance(ch, dict):
             raise DataIntegrityError(f"history change 非法: {ch!r}")
@@ -112,13 +114,20 @@ class Snapshot:
     """
 
     def __init__(self, project: Project, seq: int, operation: str,
-                 changes: list[dict[str, Any]], backup_files: list[Path]):
+                 changes: list[dict[str, Any]], backup_files: list[Path],
+                 metadata: Optional[dict[str, Any]] = None):
         self.project = project
         self.seq = seq
         self.operation = operation
         self.changes = changes
         self.backup_files = backup_files
         self._timestamp = _now_iso()
+        self.metadata = dict(metadata) if metadata is not None else None
+
+    def set_metadata(self, metadata: dict[str, Any]) -> None:
+        if not isinstance(metadata, dict):
+            raise ValueError("metadata 必须是 dict")
+        self.metadata = dict(metadata)
 
     def record(self) -> dict[str, Any]:
         record = {
@@ -127,7 +136,7 @@ class Snapshot:
             "timestamp": self._timestamp,
             "changes": self.changes,
         }
-        metadata = getattr(self, "_metadata", None)
+        metadata = self.metadata
         if isinstance(metadata, dict):
             record["metadata"] = metadata
         return record
@@ -173,7 +182,8 @@ class Snapshot:
             raise StorageError("恢复未完整完成: " + "; ".join(failures))
 
 
-def prepare_snapshot(project: Project, operation: str, target_rels: list[str]) -> Snapshot:
+def prepare_snapshot(project: Project, operation: str, target_rels: list[str],
+                     metadata: Optional[dict[str, Any]] = None) -> Snapshot:
     """准备快照: 复制全部 backups, 不写 index, 不修改业务文件。
 
     复制中途失败 → 已创建的 backups 全部清理, 原文件不变, index 无记录。
@@ -211,7 +221,7 @@ def prepare_snapshot(project: Project, operation: str, target_rels: list[str]) -
             except OSError:
                 pass
         raise
-    return Snapshot(project, seq, operation, changes, backup_files)
+    return Snapshot(project, seq, operation, changes, backup_files, metadata)
 
 
 def snapshot(project: Project, operation: str, target_rel: str) -> dict[str, Any]:

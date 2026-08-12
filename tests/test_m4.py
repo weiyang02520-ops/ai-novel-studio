@@ -46,8 +46,8 @@ def test_stale_noop_empty_nul_and_limit(project):
     with pytest.raises(MutationError, match="STALE_REVISION"):
         svc.mutate(req("outline/summary.md", "x", "bad"))
     old = path.read_text(encoding="utf-8")
-    with pytest.raises(MutationError, match="NO_CHANGE"):
-        svc.mutate(req("outline/summary.md", old, file_revision(path)))
+    unchanged = svc.mutate(req("outline/summary.md", old, file_revision(path)))
+    assert not unchanged.changed and unchanged.history_seq is None
     assert not list_history(project)
     with pytest.raises(MutationError, match="EMPTY_DESTRUCTIVE_WRITE"):
         svc.preview(req("outline/summary.md", "  ", file_revision(path)))
@@ -150,6 +150,7 @@ def test_runtime_rejects_multi_mutation_batch(project):
 def test_knowledge_search_status_doctor_and_context(project):
     atomic_write_text(project.dir / "characters/a.md", "# 阿甲\n北门")
     atomic_write_text(project.dir / "world/north.md", "# 北门\n规则")
+    atomic_write_text(project.dir / "outline/volumes/vol001.md", "# 第一卷\n")
     hits = search_knowledge(project, "北门")
     assert {h["type"] for h in hits} == {"FACT_SOURCE"}
     assert inspect_knowledge_status(project)["characters_count"] == 1
@@ -202,6 +203,8 @@ def test_weak_model_cli_blocks_mutation(tmp_path, server):
     summary = tmp_path / "novels" / pid / "outline" / "summary.md"
     before = summary.read_bytes()
     result = _run(tmp_path, "chat", "请修改总纲", "--project", pid)
-    assert result.returncode == 1
-    assert "mutation 已安全阻止" in result.stdout
-    assert summary.read_bytes() == before and server.request_count() == 0
+    assert result.returncode == 0
+    assert summary.read_bytes() == before and server.request_count() == 1
+    request = server.requests[0]["body_json"]
+    assert "tools" not in request
+    assert any("MUTATION_CAPABILITY: DISABLED" in m.get("content", "") for m in request["messages"])

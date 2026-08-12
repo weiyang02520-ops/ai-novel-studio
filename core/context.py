@@ -22,7 +22,10 @@ class ContextItem:
 
 
 def _item(project: Project, rel: str, typ: str, priority: int) -> Optional[ContextItem]:
-    path = project.store.safe_path(project.id, rel)
+    try:
+        path = project.store.safe_path(project.id, rel)
+    except Exception:
+        return None
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8")
@@ -32,7 +35,10 @@ def _item(project: Project, rel: str, typ: str, priority: int) -> Optional[Conte
 def collect_project_context(project: Project, *, current_volume: Optional[int] = None,
                             target_chapter: Optional[int] = None,
                             character_names: Optional[list[str]] = None,
-                            include_memory: bool = False) -> list[ContextItem]:
+                            world_names: Optional[list[str]] = None,
+                            include_memory: bool = False,
+                            recent_chapters: int = 0,
+                            max_recent_chars: int = 0) -> list[ContextItem]:
     items: list[ContextItem] = []
     info = json.dumps({"id": project.id, "name": project.name, "genre": project.genre,
                        "current_volume": project.metadata.get("current_volume"),
@@ -57,10 +63,21 @@ def collect_project_context(project: Project, *, current_volume: Optional[int] =
                 rel = path.relative_to(project.dir).as_posix()
                 items.append(ContextItem(rel, "CHARACTER", 95, text, len(text),
                                          BaseProvider.estimate_tokens(text), file_revision(path)))
+    if world_names:
+        from .knowledge import first_h1, safe_markdown_files
+        wanted = {n.casefold() for n in world_names}
+        for path in safe_markdown_files(project, ["world"]):
+            text = path.read_text(encoding="utf-8")
+            if path.stem.casefold() in wanted or first_h1(text).casefold() in wanted:
+                rel = path.relative_to(project.dir).as_posix()
+                items.append(ContextItem(rel, "WORLD", 95, text, len(text),
+                                         BaseProvider.estimate_tokens(text), file_revision(path)))
     if include_memory:
         for rel in ("memory/index.md", "memory/long_term.md"):
             found = _item(project, rel, "MEMORY", 30)
             if found: items.append(found)
+    if recent_chapters > 0 and max_recent_chars > 0:
+        items.extend(collect_recent_chapters(project, recent_chapters, max_recent_chars))
     return sorted(items, key=lambda i: (-i.priority, i.source))
 
 
@@ -68,6 +85,26 @@ def collect_recent_chapter_metadata(project: Project) -> list[dict]:
     from .chapter import list_chapters
     return [{k: c.get(k) for k in ("chapter", "title", "status", "words", "location")}
             for c in list_chapters(project)]
+
+
+def collect_recent_chapters(project: Project, count: int, max_chars: int) -> list[ContextItem]:
+    """Explicitly collect newest confirmed chapter files under one total hard cap."""
+    if count <= 0 or max_chars <= 0:
+        return []
+    from .chapter import list_chapters
+    confirmed = sorted((c for c in list_chapters(project) if c.get("location") == "confirmed"),
+                       key=lambda c: int(c["chapter"]), reverse=True)[:count]
+    remaining, out = max_chars, []
+    for entry in reversed(confirmed):
+        rel = f"chapters/ch{int(entry['chapter']):04d}.md"
+        path = project.store.safe_path(project.id, rel)
+        if not path.is_file() or remaining <= 0:
+            continue
+        text = path.read_text(encoding="utf-8")[:remaining]
+        remaining -= len(text)
+        out.append(ContextItem(rel, "RECENT_CHAPTER", 65, text, len(text),
+                               BaseProvider.estimate_tokens(text), file_revision(path)))
+    return out
 
 
 def render_context_items(items: list[ContextItem], max_chars: int) -> str:
@@ -85,4 +122,3 @@ def render_context_items(items: list[ContextItem], max_chars: int) -> str:
         chunks.append(label + body)
         remaining -= len(label) + len(body)
     return (prefix + "\n\n".join(chunks) + suffix)[:max_chars]
-

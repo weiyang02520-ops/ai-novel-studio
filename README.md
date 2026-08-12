@@ -158,6 +158,12 @@ python -m adapters.cli undo-last-change my-novel
 
 `knowledge doctor` 只报告重复 H1、history 损坏、章节冲突和 symlink escape 等事实，不会修复或改写项目。
 
+- 所有 `chat --project` 在支持 tool calls 时都获得完整 M4 schema；CLI 不用关键词猜测能力。普通事实/建议问题仍只读，只有明确执行修改的语义才允许 Chief 选择 mutation。
+- `tool_calls=false` 的弱模型永远只读：上下文显式标记 `MUTATION_CAPABILITY: DISABLED`，不发送或执行 mutation tools。
+- 保存 memory 遵循 `read_memory(kind) → revision guarded append → read_memory(kind)`，并可通过 history undo。
+- revision guard 是 optimistic concurrency，并在 snapshot 后、writer 前立即再次比较原始字节；它不声称具备数据库 serializable 隔离。
+- `knowledge doctor <project> --json` 可输出机器可读的 `pass|warning|error` 与问题列表。
+
 ### 角色模型 profile(可选)
 
 ```bash

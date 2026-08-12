@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agents.definitions import chief_agent_def, m4_chief_agent_def  # noqa: E402
+from agents.definitions import m4_chief_agent_def  # noqa: E402
 from agents.runtime import AgentSession  # noqa: E402
 from agents.types import AgentContext  # noqa: E402
 from core import project as project_core  # noqa: E402
@@ -23,7 +23,7 @@ from llm.factory import create_provider  # noqa: E402
 from llm.provider import ProviderError  # noqa: E402
 from llm.secret_store import default_secret_store  # noqa: E402
 from llm.usage import UsageService  # noqa: E402
-from tools.read_tools import build_chief_registry, build_readonly_registry  # noqa: E402
+from tools.read_tools import build_chief_registry  # noqa: E402
 
 
 def cmd_chat_chief(args) -> int:
@@ -59,15 +59,10 @@ def cmd_chat_chief(args) -> int:
         print(f"错误: {e.message}")
         return 1
 
-    # Compatibility-preserving progressive schema: ordinary legacy M3 reads keep
-    # their five-tool surface; M4 knowledge/edit intents receive the full registry.
-    write_markers = ("改", "修改", "更新", "补充", "新增", "创建", "保存", "追加",
-                     "update", "create", "save", "append")
-    m4_markers = write_markers + ("世界观", "规则", "知识", "资料状态", "doctor", "revision",
-                                  "memory", "world", "rule", "knowledge")
-    m4_intent = any(x in prompt for x in m4_markers)
-    agent = m4_chief_agent_def() if m4_intent else chief_agent_def()
-    registry = build_chief_registry() if m4_intent else build_readonly_registry()
+    # Every project chat uses the complete M4 capability schema. Intent is a
+    # model/prompt decision; the CLI never guesses it from keywords.
+    agent = m4_chief_agent_def()
+    registry = build_chief_registry()
     ctx = AgentContext(
         project=proj,
         settings=s,
@@ -77,11 +72,6 @@ def cmd_chat_chief(args) -> int:
         max_tool_calls=int(s.workflow.get("max_tool_calls_per_turn", 8) or 8),
     )
     session = AgentSession(ctx)
-
-    if not cfg.tool_calls and any(x in prompt.lower() for x in write_markers):
-        provider.close()
-        print("当前模型不支持工具调用：弱模型模式只能读取项目数据，所有 mutation 已安全阻止。")
-        return 1
 
     usage_svc = UsageService(getattr(args, "usage_path", None) or PROJECT_ROOT / "data" / "logs" / "usage.jsonl")
     started = time.monotonic()

@@ -208,3 +208,33 @@
 - `?? tests/test_m4.py`
 - `?? tools/write_tools.py`
 
+
+## 2026-08-12 19:33 — Checkpoint
+
+摘要: add 3 new files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M README.md`
+- ` M adapters/cli/m3.py`
+- ` M adapters/cli/m4.py`
+- ` M adapters/cli/main.py`
+- ` M agents/context.py`
+- ` M agents/definitions.py`
+- ` M agents/prompts/chief_system.md`
+- ` M core/chapter.py`
+- ` M core/context.py`
+- ` M core/history.py`
+- ` M core/knowledge.py`
+- ` M core/mutation.py`
+- ` M core/project.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M docs/context/CHATGPT_MEMORY.md`
+- ` M tests/test_m3_cli.py`
+- ` M tests/test_m4.py`
+- ` M tools/read_tools.py`
+- ` M tools/write_tools.py`
+- `?? core/memory.py`
+- `?? docs/context/M5_READINESS.md`
+- `?? tests/test_m4_hardening.py`
+

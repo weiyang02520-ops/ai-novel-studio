@@ -6,7 +6,7 @@ import json
 from core import history as history_core
 from core import knowledge
 from core.mutation import file_revision
-from adapters.cli.commands import _open_project_or_error
+from adapters.cli.commands import _open_project_or_error, _store
 
 
 def _files(p, root):
@@ -31,7 +31,8 @@ def cmd_outline(args):
     rel = "outline/summary.md"
     if args.volume: rel = f"outline/volumes/vol{args.volume:03d}.md"
     if args.chapter: rel = f"outline/chapters/ch{args.chapter:04d}.md"
-    path = p.store.safe_path(p.id, rel)
+    try: path = p.store.safe_path(p.id, rel)
+    except Exception: print("错误: 项目路径不安全"); return 1
     if not path.is_file(): print(f"NOT_FOUND: {rel}"); return 1
     print(f"SOURCE: {rel}\nREVISION_SHA256: {file_revision(path)}\nCONTENT:")
     print(path.read_text(encoding="utf-8"), end="")
@@ -75,8 +76,11 @@ def cmd_memory(args):
             if hit["relative_path"].startswith("memory/"):
                 print(f"{hit['relative_path']}:{hit['line']} TYPE: {hit['type']} {hit['snippet']}")
         return 0
-    rel = "memory/foreshadowing/index.md" if args.kind == "foreshadowing" else f"memory/{args.kind}.md"
-    path = p.store.safe_path(p.id, rel)
+    from core.memory import memory_target_for_kind
+    try: rel = memory_target_for_kind(args.kind)
+    except ValueError as e: print(str(e)); return 1
+    try: path = p.store.safe_path(p.id, rel)
+    except Exception: print("错误: 项目路径不安全"); return 1
     if not path.is_file(): print(f"NOT_FOUND: {rel}"); return 1
     print(f"SOURCE: {rel}\nTYPE: DERIVED_MEMORY\nREVISION_SHA256: {file_revision(path)}\nCONTENT:")
     print(path.read_text(encoding="utf-8"), end="")
@@ -86,7 +90,8 @@ def cmd_memory(args):
 def cmd_rules(args):
     p = _open_project_or_error(args)
     if p is None: return 1
-    path = p.store.safe_path(p.id, "rules/writing_rules.md")
+    try: path = p.store.safe_path(p.id, "rules/writing_rules.md")
+    except Exception: print("错误: 项目路径不安全"); return 1
     if not path.is_file(): print("NOT_FOUND"); return 1
     print(f"REVISION_SHA256: {file_revision(path)}\nCONTENT:")
     print(path.read_text(encoding="utf-8"), end="")
@@ -94,19 +99,36 @@ def cmd_rules(args):
 
 
 def cmd_knowledge(args):
-    p = _open_project_or_error(args)
-    if p is None: return 1
+    if args.knowledge_command == "doctor":
+        from core.project import open_project
+        try:
+            p = open_project(_store(args), args.project_id)
+        except Exception as e:
+            issues = [{"severity":"ERROR", "code":"PROJECT_METADATA", "message":str(e)}]
+            if getattr(args, "json", False):
+                print(json.dumps({"status":"error", "issues":issues}, ensure_ascii=False, indent=2))
+            else:
+                print(f"ERROR PROJECT_METADATA: {e}")
+            return 1
+    else:
+        p = _open_project_or_error(args)
+        if p is None: return 1
     if args.knowledge_command == "search":
-        for hit in knowledge.search_knowledge(p, args.keyword, include_chapters=args.include_chapters):
+        for hit in knowledge.search_knowledge(p, args.keyword, include_chapters=args.include_chapters,
+                                              max_hits=args.limit):
             print(f"{hit['relative_path']}:{hit['line']} TYPE: {hit['type']} {hit['snippet']}")
         return 0
     if args.knowledge_command == "doctor":
         issues = knowledge.doctor(p)
+        if getattr(args, "json", False):
+            status = "error" if any(i["severity"] == "ERROR" for i in issues) else ("warning" if issues else "pass")
+            print(json.dumps({"status": status, "issues": issues}, ensure_ascii=False, indent=2))
+            return 1 if status == "error" else 0
         if not issues: print("KNOWLEDGE DOCTOR PASS"); return 0
         for i in issues: print(f"{i['severity']} {i['code']}: {i['message']}")
         return 1 if any(i["severity"] == "ERROR" for i in issues) else 0
     for item in knowledge.knowledge_revisions(p):
-        print(f"{item['relative_path']}\t{item['sha256'][:12]}\t{item['size']}")
+        print(f"{item['relative_path']}\t{item['sha256'][:12]}\t{item['size']}\t{item['type']}")
     return 0
 
 
@@ -119,7 +141,7 @@ def cmd_history_show(args):
     if "metadata" in safe and isinstance(safe["metadata"], dict):
         safe["metadata"] = dict(safe["metadata"])
         diff = safe["metadata"].get("diff")
-        if isinstance(diff, dict): diff.pop("preview", None)
+        if isinstance(diff, dict) and not getattr(args, "show_diff", False): diff.pop("preview", None)
     print(json.dumps(safe, ensure_ascii=False, indent=2))
     return 0
 
@@ -141,4 +163,3 @@ def cmd_undo_alias(args):
     except Exception as e: print(f"错误: {e}"); return 1
     print(f"UNDO OK\noperation: {rec['operation']}\ntargets: {', '.join(c['target'] for c in rec['changes'])}")
     return 0
-

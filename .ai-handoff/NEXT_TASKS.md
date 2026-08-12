@@ -2,8 +2,8 @@
 
 ## P0
 
-- [ ] External ChatGPT M4 review（M4 SUPER BATCH implementation complete）。
+- [ ] External ChatGPT final M4 Gate（M4 FINAL HARDENING complete）。
 
 ## P1
 
-- [ ] M5 Writer Agent + chapter generation + dynamic ContextBudget — **NOT AUTHORIZED**。
+- [ ] M5 Writer SUPER BATCH — **NOT AUTHORIZED**。

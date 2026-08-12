@@ -1,20 +1,20 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 18:50 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-12 19:33 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M4 SUPER BATCH implementation complete. Awaiting External ChatGPT M4 review.**
+**M4 FINAL HARDENING complete. Awaiting External ChatGPT final M4 review.**
 
 M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 
 ## 本轮变更
 
-**add 6 new files**(新增 6 / 修改 1 / 删除 0)
+**add 3 new files**(新增 3 / 修改 1 / 删除 0)
 
 ## 已验证内容
 
-- `python -m pytest tests/ -v`: **464 passed, 1 skipped, 0 failed**。
+- `python -m pytest tests/ -v`: **484 passed, 5 skipped, 0 failed**（Windows 无 symlink 权限用例明确 skip）。
 - Local HTTP E2E：CLI → create_provider → OpenAICompatibleProvider → HttpTransport → Chief → Registry → MutationService → filesystem/history，四轮 read → update → read → final PASS；undo 原字节恢复 PASS。
 - Mutation：create/update/undo/stale/no-op/empty/NUL/limit/write failure/post-write verify/history commit rollback/rollback failure PASS。
 - Character/World/Memory create/update/append/undo 与 stable slug/H1 PASS。

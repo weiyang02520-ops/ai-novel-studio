@@ -97,6 +97,11 @@ ai-novel-studio/
 - **Knowledge Doctor is read-only**: 只报告结构事实，不评分、不修复。
 - **ContextCollector shared foundation**: M3 weak fallback 与未来 M5 共用 `core.context`；默认不收集章节正文；动态 Writer budget 仍属 M5。
 - **Writer remains forbidden**: Chief 不拥有 write chapter/confirm/reviewer/delete/shell 权限，M5 未授权。
+- **Agent-facing reads are safe-path resolved**: exact lookup、H1 scan、search、CLI、doctor、context 与章节枚举在最终读取前均经过 `safe_path` 或 `safe_markdown_files`；项目外 symlink 不得泄漏内容。
+- **memory revision contract**: `MEMORY_KINDS` 与 `memory_target_for_kind` 是 read/write 单一映射；Chief 保存前后必须 `read_memory`。
+- **race hardening**: initial revision check + snapshot 后 writer 前 immediate byte recheck；race 时只 discard，绝不 restore 外部新内容。该语义是 optimistic concurrency，不是数据库 serializable transaction。
+- **identity/no-op**: existing character/world 的 H1 必须稳定；no-op 是正常 `NO_CHANGE` 结果且不写 history。
+- **project Chief routing**: tool_calls=true 时所有 project chat 使用完整 M4 registry；CLI 不做关键词/substring capability routing。tool_calls=false 永远无工具，并注入 `MUTATION_CAPABILITY: DISABLED`。
 
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)

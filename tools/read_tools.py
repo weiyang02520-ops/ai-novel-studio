@@ -107,9 +107,9 @@ def _read_outline(ctx: AgentContext, args: dict[str, Any]) -> str:
         parts.append(_fact_file(ctx, vol_rel, vtext) if vok else f"{vol_rel} 不存在\nREVISION_SHA256: ABSENT")
 
         # 列出可用文件(不读内容)
-        pdir = ctx.project.store.project_dir(ctx.project.id)
-        vols = sorted(f.name for f in (pdir / "outline" / "volumes").glob("*.md")) if (pdir / "outline" / "volumes").exists() else []
-        chs = sorted(f.name for f in (pdir / "outline" / "chapters").glob("*.md")) if (pdir / "outline" / "chapters").exists() else []
+        from core.knowledge import safe_markdown_files
+        vols = sorted(f.name for f in safe_markdown_files(ctx.project, ["outline/volumes"]))
+        chs = sorted(f.name for f in safe_markdown_files(ctx.project, ["outline/chapters"]))
         parts.append("可用卷大纲: " + (", ".join(vols) if vols else "(无)"))
         parts.append("可用章细纲: " + (", ".join(chs) if chs else "(无)"))
         return "\n\n".join(parts)
@@ -143,15 +143,8 @@ def _first_h1(text: str) -> str:
     return ""
 
 
-def _character_files(ctx: AgentContext) -> list[Path]:
-    pdir = ctx.project.store.project_dir(ctx.project.id)
-    d = pdir / "characters"
-    if not d.exists():
-        return []
-    return sorted(f for f in d.iterdir() if f.is_file() and f.name.endswith(".md"))
-
-
 def _read_character(ctx: AgentContext, args: dict[str, Any]) -> str:
+    from core.knowledge import safe_markdown_files
     name = (args.get("name") or "").strip()
     if not name:
         raise ToolExecutionError("INVALID_NAME: name 必填(non-empty string)")
@@ -168,7 +161,7 @@ def _read_character(ctx: AgentContext, args: dict[str, Any]) -> str:
 
     # 第二: H1 标题匹配显示名(§62)
     matches: list[str] = []
-    for f in _character_files(ctx):
+    for f in safe_markdown_files(ctx.project, ["characters"]):
         try:
             content = f.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
@@ -213,6 +206,20 @@ def _read_rules(ctx: AgentContext, args: dict[str, Any]) -> str:
     return _fact_file(ctx, rel, text) if ok else f"NOT_FOUND: {rel}\nREVISION_SHA256: ABSENT"
 
 
+def _read_memory(ctx: AgentContext, args: dict[str, Any]) -> str:
+    from core.memory import memory_target_for_kind
+    try:
+        rel = memory_target_for_kind(args.get("kind", ""))
+    except ValueError as e:
+        raise ToolExecutionError(str(e))
+    text, ok = _read_project_file(ctx, rel)
+    if not ok:
+        return f"SOURCE: {rel}\nTYPE: DERIVED_MEMORY\nREVISION_SHA256: ABSENT\nNOT_FOUND"
+    path = ctx.project.store.safe_path(ctx.project.id, rel)
+    return (f"SOURCE: {rel}\nTYPE: DERIVED_MEMORY\nREVISION_SHA256: "
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}\nCONTENT:\n{text}")
+
+
 def _search_project_knowledge(ctx: AgentContext, args: dict[str, Any]) -> str:
     from core.knowledge import search_knowledge
     try:
@@ -249,9 +256,10 @@ def _search_memory(ctx: AgentContext, args: dict[str, Any]) -> str:
         raise ToolExecutionError("INVALID_LIMIT: limit 必须是整数")
     limit = max(1, min(limit, _MEMORY_LIMIT_MAX))
 
+    from core.knowledge import safe_markdown_files
     pdir = ctx.project.store.project_dir(ctx.project.id)
-    mem_dir = pdir / "memory"
-    if not mem_dir.exists():
+    files = safe_markdown_files(ctx.project, ["memory"])
+    if not files:
         return "SOURCE: memory/\nTYPE: DERIVED_MEMORY\n(记忆目录为空)"
 
     # 只搜 memory/(§67); 所有路径经 safe_path 解析(防 symlink 逃逸)
@@ -260,16 +268,11 @@ def _search_memory(ctx: AgentContext, args: dict[str, Any]) -> str:
     scanned_files = 0
     scanned_chars = 0
 
-    for f in sorted(mem_dir.rglob("*.md")):
-        if not f.is_file():
-            continue
+    for f in files:
         scanned_files += 1
         if scanned_files > _MEMORY_MAX_FILES:
             break
-        try:
-            safe = ctx.project.store.safe_path(ctx.project.id, f.relative_to(pdir).as_posix())
-        except Exception:
-            continue  # symlink 逃逸等 → 跳过
+        safe = f
         try:
             lines = safe.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError):
@@ -359,6 +362,8 @@ def build_chief_registry() -> Any:
         "type":"object", "properties":{"name":{"type":"string"}}, "required":[]}, _read_world))
     registry.register(ToolDef("read_rules", "读取正式写作规则及 revision。", {
         "type":"object", "properties":{}, "required":[]}, _read_rules))
+    registry.register(ToolDef("read_memory", "按 kind 读取完整派生记忆及 revision；保存前后必须调用。", {
+        "type":"object", "properties":{"kind":{"type":"string"}}, "required":["kind"]}, _read_memory))
     registry.register(ToolDef("search_project_knowledge", "安全搜索大纲、人物、世界观、规则、记忆；默认不搜正文。", {
         "type":"object", "properties":{"keyword":{"type":"string"},
         "include_chapters":{"type":"boolean"}, "limit":{"type":"integer"}}, "required":["keyword"]},

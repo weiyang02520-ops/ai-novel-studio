@@ -441,13 +441,14 @@ def list_chapters(project: Project) -> list[dict[str, Any]]:
             if n is None:
                 continue
             try:
+                f = project.store.safe_path(project.id, f"drafts/{f.name}")
                 meta = read_draft_file(f)
                 add_entry(n, {
                     "chapter": n, "title": meta.get("title", ""),
                     "status": meta.get("status", "?"), "words": int(meta.get("words", 0)),
                     "updated_at": meta.get("updated_at", ""), "location": "draft",
                 })
-            except DataIntegrityError:
+            except (DataIntegrityError, StorageError):
                 add_entry(n, {
                     "chapter": n, "title": "(损坏)", "status": "INVALID",
                     "words": 0, "updated_at": "", "location": "draft",
@@ -462,13 +463,14 @@ def list_chapters(project: Project) -> list[dict[str, Any]]:
             if n is None:
                 continue
             try:
+                f = project.store.safe_path(project.id, f"chapters/{f.name}")
                 meta = read_confirmed_chapter_file(f)
                 add_entry(n, {
                     "chapter": n, "title": meta.get("title", ""),
                     "status": meta.get("status", "?"), "words": int(meta.get("words", 0)),
                     "updated_at": meta.get("updated_at", ""), "location": "confirmed",
                 })
-            except DataIntegrityError:
+            except (DataIntegrityError, StorageError):
                 add_entry(n, {
                     "chapter": n, "title": "(损坏)", "status": "INVALID",
                     "words": 0, "updated_at": "", "location": "confirmed",

@@ -8,7 +8,7 @@
 
 ## phase
 
-**M4 SUPER BATCH implementation complete. Awaiting External ChatGPT M4 review.**
+**M4 FINAL HARDENING complete. Awaiting External ChatGPT final M4 review.**
 
 M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 
@@ -17,6 +17,14 @@ M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 **REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**。生产配置没有可用的 `secret_reference`；未索取、打印或保存 Key。localhost 真实 HTTP 生产链路已通过。
 
 ## last_round
+
+- FINAL HARDENING：统一 Agent/CLI/context/doctor 安全读取边界；项目外 symlink 不读取。
+- 新增 `read_memory` 与共享 memory kind→target/revision contract。
+- Mutation snapshot 后 writer 前立即字节 recheck；race 只 discard，不 restore 外部内容。
+- 所有 project Chief chat 统一完整 M4 registry；删除关键词 capability routing；弱模型显式只读。
+- Doctor 复用 project validate，并补 UTF-8、缺失资料、symlink、JSON UX。
+- ContextCollector 补 named world 与显式 bounded recent confirmed chapters；默认仍无正文。
+- Character/world H1 identity guard；no-op 正常返回且 0 history；history metadata 正式 optional dict。
 
 - 新增统一 `core.mutation.MutationService`：raw-byte SHA256 revision、ABSENT create guard、stale/no-op/empty/NUL/size 校验、snapshot → atomic write → history commit → byte verify、失败 restore/discard、ROLLBACK_FAILED 诚实高严重度错误。
 - 所有 AI 资料写入集中在四个 Chief 工具：`update_outline` / `update_character` / `update_world` / `save_memory_entry`；人物和世界观支持 H1 查找、确定性中文 hash slug、collision/ambiguity 防护、create 自动 H1。
@@ -28,7 +36,7 @@ M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 
 ## verified
 
-- `python -m pytest tests/ -v`: **464 passed, 1 skipped, 0 failed**。
+- `python -m pytest tests/ -v`: **484 passed, 5 skipped, 0 failed**（Windows 无 symlink 权限用例明确 skip）。
 - Local HTTP E2E：CLI → create_provider → OpenAICompatibleProvider → HttpTransport → Chief → Registry → MutationService → filesystem/history，四轮 read → update → read → final PASS；undo 原字节恢复 PASS。
 - Mutation：create/update/undo/stale/no-op/empty/NUL/limit/write failure/post-write verify/history commit rollback/rollback failure PASS。
 - Character/World/Memory create/update/append/undo 与 stable slug/H1 PASS。
@@ -63,4 +71,4 @@ M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
 ## next
 
 - P0: External ChatGPT M4 review。
-- P1: M5 Writer Agent + chapter generation + dynamic ContextBudget；**NOT AUTHORIZED**。
+- P1: M5 Writer SUPER BATCH；**NOT AUTHORIZED**。

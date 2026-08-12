@@ -17,7 +17,7 @@ CHIEF_TOOLS = [
 ]
 
 M4_CHIEF_TOOLS = CHIEF_TOOLS + [
-    "read_world", "read_rules", "search_project_knowledge", "inspect_knowledge_status",
+    "read_world", "read_rules", "read_memory", "search_project_knowledge", "inspect_knowledge_status",
     "update_outline", "update_character", "update_world", "save_memory_entry",
 ]
 

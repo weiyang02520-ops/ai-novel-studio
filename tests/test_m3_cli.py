@@ -119,7 +119,10 @@ def test_chief_tool_loop_list_chapters(tmp_path, server: MockServer):
     # 第一次请求: 带 tools schema(5 个只读工具)
     req1 = server.requests[0]["body_json"]
     tool_names = [t["function"]["name"] for t in req1.get("tools", [])]
-    assert tool_names == ["project_info", "list_chapters", "read_outline", "read_character", "search_memory"]
+    assert tool_names == ["project_info", "list_chapters", "read_outline", "read_character", "search_memory",
+                          "read_world", "read_rules", "read_memory", "search_project_knowledge",
+                          "inspect_knowledge_status", "update_outline", "update_character", "update_world",
+                          "save_memory_entry"]
     assert req1["messages"][0]["role"] == "system"
     assert "主编" in req1["messages"][0]["content"]
     # 第二次请求: assistant tool_calls + role=tool 回填(§145)
@@ -238,12 +241,12 @@ def test_chief_falls_back_to_default(tmp_path, server: MockServer):
 def test_chief_round_limit_exit(tmp_path, server: MockServer):
     pid = _create_project(tmp_path, "m3-limit")
     _write_settings(tmp_path, base_url=server.base_url)
-    for _ in range(6):
+    for _ in range(7):
         server.responses.append((200, TOOL_CALL_BODY))
     r = _run(tmp_path, "chat", "无限?", "--project", pid)
     assert r.returncode == 1
     assert "轮次" in r.stdout
-    assert server.request_count() == 5  # 4 轮工具 + 1 次被拒前调用
+    assert server.request_count() == 7  # M4: 6 轮工具 + 1 次被拒前调用
     assert "Traceback" not in r.stderr
 
 

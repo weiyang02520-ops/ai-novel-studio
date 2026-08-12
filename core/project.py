@@ -341,6 +341,11 @@ def validate_project(store: ProjectStore, project_id: str) -> list[str]:
             if not f.is_file() or not f.name.endswith(".md"):
                 continue
             try:
+                f = proj.store.safe_path(proj.id, f"chapters/{f.name}")
+            except StorageError:
+                issues.append(f"chapters/{f.name}: 路径越界")
+                continue
+            try:
                 meta = read_confirmed_chapter_file(f)
             except DataIntegrityError as e:
                 issues.append(f"chapters/{f.name}: {e}")
@@ -360,6 +365,11 @@ def validate_project(store: ProjectStore, project_id: str) -> list[str]:
     if drafts_dir.exists():
         for f in sorted(drafts_dir.iterdir()):
             if not f.is_file() or not f.name.endswith(".draft.md"):
+                continue
+            try:
+                f = proj.store.safe_path(proj.id, f"drafts/{f.name}")
+            except StorageError:
+                issues.append(f"drafts/{f.name}: 路径越界")
                 continue
             try:
                 meta = read_draft_file(f)

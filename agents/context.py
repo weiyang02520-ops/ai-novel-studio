@@ -44,7 +44,9 @@ def build_fallback_context(ctx: AgentContext) -> str:
     chapter_text = json.dumps(collect_recent_chapter_metadata(ctx.project), ensure_ascii=False, indent=2)
     items.append(ContextItem("chapters/ + drafts/", "PROJECT", 80, chapter_text,
                              len(chapter_text), BaseProvider.estimate_tokens(chapter_text)))
-    return render_context_items(items, FALLBACK_BUDGET_CHARS)
+    rendered = render_context_items(items, FALLBACK_BUDGET_CHARS)
+    marker = "\nMUTATION_CAPABILITY: DISABLED\n"
+    return (rendered[:max(0, FALLBACK_BUDGET_CHARS-len(marker))] + marker)[:FALLBACK_BUDGET_CHARS]
 
 
 def _legacy_build_fallback_context(ctx: AgentContext) -> str:

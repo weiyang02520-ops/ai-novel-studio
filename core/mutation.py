@@ -126,19 +126,26 @@ class MutationService:
         target, old, new, old_rev, diff = self._validate(req)
         new_rev = revision_sha256(new)
         if old == new:
-            raise MutationError("NO_CHANGE", "新旧字节完全相同")
-        try:
-            snap = self.snapshot_factory(self.project, req.operation, [req.target_rel])
-        except Exception as e:
-            raise MutationError("SNAPSHOT_FAILED", "无法准备快照，文件未修改") from e
-        # Metadata is concise and never stores full document text.
-        snap._metadata = {  # type: ignore[attr-defined]
-            "agent_id": req.agent_id,
-            "content_kind": req.content_kind,
-            "old_revision": old_rev,
-            "new_revision": new_rev,
+            return MutationResult(False, False, req.target_rel, old_rev, old_rev,
+                                  None, req.operation, len(old), len(new), diff)
+        metadata = {
+            "agent_id": req.agent_id, "content_kind": req.content_kind,
+            "old_revision": old_rev, "new_revision": new_rev,
             "diff": dataclasses.asdict(diff) | {"preview": diff.preview[:4000]},
         }
+        try:
+            try:
+                snap = self.snapshot_factory(self.project, req.operation, [req.target_rel], metadata=metadata)
+            except TypeError:
+                snap = self.snapshot_factory(self.project, req.operation, [req.target_rel])
+                snap.set_metadata(metadata)
+        except Exception as e:
+            raise MutationError("SNAPSHOT_FAILED", "无法准备快照，文件未修改") from e
+        current_present = target.is_file()
+        current = target.read_bytes() if current_present else b""
+        if current_present != (old_rev != ABSENT) or current != old:
+            snap.discard()
+            raise MutationError("STALE_REVISION", "snapshot 准备期间目标已变化；外部内容保持不变")
         try:
             self.writer(target, req.new_text)
             if target.read_bytes() != new:
