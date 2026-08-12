@@ -1,4 +1,4 @@
-"""Agent 定义(M3 只实例化 Chief; Writer/Reviewer 未来里程碑再建, 不创建可运行实例)。"""
+"""Agent definitions: Chief knowledge work plus the M5 prose-only Writer."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,3 +44,8 @@ def m4_chief_agent_def() -> AgentDef:
     agent.tools = list(M4_CHIEF_TOOLS)
     agent.max_tool_rounds = 6
     return agent
+
+def writer_agent_def() -> AgentDef:
+    """M5 Writer has no tools; workflow owns every persistent draft mutation."""
+    return AgentDef(id="writer", name="写作分身", system_prompt=_load_prompt("writer_system.md"),
+                    tools=[], max_tool_rounds=0, model_role="writer")

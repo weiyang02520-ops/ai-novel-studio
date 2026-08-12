@@ -46,3 +46,6 @@ Knowledge Doctor 只读且不评分。FACT_SOURCE 高于 DERIVED_MEMORY。Contex
 
 ## [DESIGN_DECISION] M4 Final Hardening
 所有 project Chief chat 在支持工具时统一获得完整 M4 registry，不做关键词能力路由；弱模型显式只读。Memory read/write 共用 kind-target 映射。Mutation 在 snapshot 后 writer 前立即重检原始字节，race 时只 discard 而不 restore。人物/世界观 H1 是稳定 identity；no-op 为正常结果且不写 history。
+
+## [DESIGN_DECISION] M5 Writer
+M5 Writer generates revision-protected AI drafts from bounded project context; Reviewer remains M6.

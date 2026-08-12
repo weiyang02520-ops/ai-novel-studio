@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from .chapter import list_chapters
 from .mutation import file_revision
 from .project import Project
+from .storage import DataIntegrityError
 
 FACT_ROOTS = ("outline", "characters", "world", "rules")
 SEARCH_ROOTS = FACT_ROOTS + ("memory",)
@@ -145,6 +146,24 @@ def doctor(project: Project) -> list[dict[str, str]]:
         except UnicodeError:
             rel = path.relative_to(project.dir).as_posix()
             add("WARNING" if rel.startswith("memory/") else "ERROR", "INVALID_UTF8", rel)
+    # M5 AI drafts stay draft-only until the future Reviewer owns READY transitions.
+    drafts_dir = project.store.safe_path(project.id, "drafts")
+    if drafts_dir.exists():
+        from .chapter import parse_frontmatter
+        for path in sorted(drafts_dir.glob("*.draft.md")):
+            try:
+                meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, DataIntegrityError):
+                continue  # Canonical project validation already reports malformed drafts.
+            if meta.get("origin") != "ai":
+                continue
+            if meta.get("status") in {"user_confirmed", "confirmed"}:
+                add("ERROR", "AI_DRAFT_INVALID_STATUS",
+                    f"{path.name}: origin=ai 不允许 status={meta.get('status')}")
+            state = meta.get("generation_state")
+            if state not in {"complete", "truncated"}:
+                add("ERROR", "AI_DRAFT_INVALID_GENERATION_STATE",
+                    f"{path.name}: generation_state={state!r}")
     # Explicitly report symlinks that cannot stay inside the project.
     for path in project.dir.rglob("*"):
         if path.is_symlink():

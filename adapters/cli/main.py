@@ -251,6 +251,46 @@ def build_parser() -> argparse.ArgumentParser:
     audit=sub.add_parser("audit"); aus=audit.add_subparsers(dest="audit_command"); x=aus.add_parser("mutations"); x.add_argument("project_id")
     undo=sub.add_parser("undo-last-change"); undo.add_argument("project_id")
 
+    # ── M5 Writer / context / AI draft inspection ──
+    write = sub.add_parser("write", help="生成 revision-protected AI 草稿")
+    write.add_argument("project_id")
+    write.add_argument("chapter", type=int, nargs="?")
+    write.add_argument("--instruction", default="")
+    write.add_argument("--title", default="")
+    write.add_argument("--target-chars", type=int, default=4000)
+    write.add_argument("--character", action="append", default=[])
+    write.add_argument("--world", action="append", default=[])
+    write.add_argument("--show-plan", action="store_true")
+    write.add_argument("--plan-only", action="store_true")
+    write.add_argument("--show-context", action="store_true")
+    write.add_argument("--no-stream", action="store_true")
+    modes = write.add_mutually_exclusive_group()
+    modes.add_argument("--rewrite", action="store_true")
+    modes.add_argument("--continue", dest="continue_mode", action="store_true")
+    modes.add_argument("--resume", action="store_true")
+
+    context_cmd = sub.add_parser("context", help="离线 Writer context 规划")
+    context_sub = context_cmd.add_subparsers(dest="context_command")
+    cplan = context_sub.add_parser("plan")
+    cplan.add_argument("project_id")
+    cplan.add_argument("--chapter", type=int)
+    cplan.add_argument("--instruction", default="")
+    cplan.add_argument("--character", action="append", default=[])
+    cplan.add_argument("--world", action="append", default=[])
+    cplan.add_argument("--json", action="store_true")
+    cplan.add_argument("--show-text", action="store_true")
+
+    draft = sub.add_parser("draft", help="canonical draft 与 partial workspace")
+    draft_sub = draft.add_subparsers(dest="draft_command")
+    dlist = draft_sub.add_parser("list"); dlist.add_argument("project_id")
+    for action in ("show", "info"):
+        item = draft_sub.add_parser(action); item.add_argument("project_id"); item.add_argument("chapter", type=int)
+    partial = draft_sub.add_parser("partial")
+    partial_sub = partial.add_subparsers(dest="partial_command")
+    plist = partial_sub.add_parser("list"); plist.add_argument("project_id")
+    for action in ("show", "discard"):
+        item = partial_sub.add_parser(action); item.add_argument("project_id"); item.add_argument("chapter", type=int)
+
     return p
 
 
@@ -360,6 +400,26 @@ def _main(argv: list[str] | None = None) -> int:
         return {"outline":m4.cmd_outline,"character":m4.cmd_character,"world":m4.cmd_world,
                 "memory":m4.cmd_memory,"rules":m4.cmd_rules,"knowledge":m4.cmd_knowledge,
                 "audit":m4.cmd_audit,"undo-last-change":m4.cmd_undo_alias}[args.command](args)
+
+    if args.command in {"write", "context", "draft"}:
+        import adapters.cli.m5 as m5
+        if args.command == "write":
+            if args.plan_only and (args.rewrite or args.continue_mode or args.resume):
+                print("错误: --plan-only 不能与 --rewrite/--continue/--resume 同用")
+                return 1
+            return m5.cmd_write(args)
+        if args.command == "context":
+            if getattr(args, "context_command", None) != "plan":
+                print("用法: ai-novel-studio context plan <project_id>")
+                return 0
+            return m5.cmd_context(args)
+        if not getattr(args, "draft_command", None):
+            print("用法: ai-novel-studio draft {list|show|info|partial}")
+            return 0
+        if args.draft_command == "partial" and not getattr(args, "partial_command", None):
+            print("用法: ai-novel-studio draft partial {list|show|discard}")
+            return 0
+        return m5.cmd_draft(args)
 
     print(f"未知命令: {args.command}")
     return 1

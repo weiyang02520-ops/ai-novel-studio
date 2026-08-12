@@ -95,7 +95,7 @@ def collect_recent_chapters(project: Project, count: int, max_chars: int) -> lis
     confirmed = sorted((c for c in list_chapters(project) if c.get("location") == "confirmed"),
                        key=lambda c: int(c["chapter"]), reverse=True)[:count]
     remaining, out = max_chars, []
-    for entry in reversed(confirmed):
+    for entry in confirmed:
         rel = f"chapters/ch{int(entry['chapter']):04d}.md"
         path = project.store.safe_path(project.id, rel)
         if not path.is_file() or remaining <= 0:

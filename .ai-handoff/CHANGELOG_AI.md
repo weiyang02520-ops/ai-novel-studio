@@ -238,3 +238,39 @@
 - `?? docs/context/M5_READINESS.md`
 - `?? tests/test_m4_hardening.py`
 
+
+## 2026-08-12 20:47 — Checkpoint
+
+摘要: update 13 files
+
+- `M  .ai-handoff/CHANGELOG_AI.md`
+- `M  .ai-handoff/HANDOFF.md`
+- `M  .ai-handoff/NEXT_TASKS.md`
+- `MM .ai-handoff/PROJECT_STATE.md`
+- ` M .ai-handoff/REVIEW_REQUEST.md`
+- `M  .ai-handoff/STATUS.md`
+- `M  README.md`
+- `AM adapters/cli/m5.py`
+- `M  adapters/cli/main.py`
+- `M  agents/definitions.py`
+- `A  agents/planner.py`
+- `A  agents/prompts/chief_writer_plan.md`
+- `A  agents/prompts/writer_system.md`
+- `A  agents/task_card.py`
+- `AM agents/writer.py`
+- `AM core/ai_draft.py`
+- `MM core/chapter.py`
+- ` M core/context.py`
+- `AM core/context_budget.py`
+- `AM core/generation.py`
+- `M  core/knowledge.py`
+- `A  core/relevance.py`
+- `AM core/write_workflow.py`
+- `MM docs/context/AGENT_MEMORY.md`
+- `M  docs/context/CHATGPT_MEMORY.md`
+- `M  docs/context/M5_READINESS.md`
+- `AM docs/context/M6_READINESS.md`
+- `AM tests/test_m5.py`
+- `A  tests/test_m5_http_e2e.py`
+- `A  core/locks.py`
+

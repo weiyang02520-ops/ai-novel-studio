@@ -1,25 +1,23 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 19:33 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-12 20:47 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M4 FINAL HARDENING complete. Awaiting External ChatGPT final M4 review.**
+**M5 WRITER SUPER BATCH implementation complete. Awaiting External ChatGPT M5 review.**
 
-M5 NOT AUTHORIZED；Writer、章节生成与动态 ContextBudget 未开始。
+M6 NOT AUTHORIZED.
 
 ## 本轮变更
 
-**add 3 new files**(新增 3 / 修改 1 / 删除 0)
+**update 13 files**(新增 1 / 修改 13 / 删除 0)
 
 ## 已验证内容
 
-- `python -m pytest tests/ -v`: **484 passed, 5 skipped, 0 failed**（Windows 无 symlink 权限用例明确 skip）。
-- Local HTTP E2E：CLI → create_provider → OpenAICompatibleProvider → HttpTransport → Chief → Registry → MutationService → filesystem/history，四轮 read → update → read → final PASS；undo 原字节恢复 PASS。
-- Mutation：create/update/undo/stale/no-op/empty/NUL/limit/write failure/post-write verify/history commit rollback/rollback failure PASS。
-- Character/World/Memory create/update/append/undo 与 stable slug/H1 PASS。
-- Batch rejection、weak-model read regression/write block、M0/M1/M2/M3 regressions PASS。
-- Knowledge search/doctor/revisions、ContextCollector priority/bounding/no chapter dump PASS。
+- Exhaustive parallel pytest partition plus final localhost matrix: **521 passed, 5 skipped, 0 failed**; collected = 526。
+- M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
+- Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
+- Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。
 - Real external: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
 
 ## 未验证内容

@@ -9,11 +9,11 @@
 - 管理多本小说的项目结构(大纲/人物/世界观/章节/记忆)
 - 章节本地持久化(纯 Markdown + JSON, 无数据库, 备份 = 拷贝目录)
 - 直接对话: 支持符合 OpenAI Chat Completions 兼容接口的服务(OpenAI / DeepSeek / OpenRouter / Ollama 本地等)
-- 主编 Agent 可读取并安全修改小说资料；Writer / Reviewer 仍在后续里程碑
+- 主编 Agent 可规划章节并安全修改资料；Writer 可生成受保护的 AI 草稿；Reviewer 仍在后续里程碑
 - 所有 AI 调用走你自己的 OpenAI 兼容 API(自定义 Base URL / API Key / Model)
 - 数据 100% 本地保存, 无云同步, 无账号系统
 
-> 当前状态: M4 实现完成，等待外部审核。主编可管理大纲、人物、世界观与派生记忆，但仍不能生成或修改章节正文。
+> 当前状态: M5 Writer 实现完成，等待外部审核。Writer 只生成 `origin=ai, status=draft` 的草稿；M6 Reviewer 尚未授权。
 
 ## 安装
 
@@ -172,6 +172,37 @@ python -m adapters.cli config set models.writer.model <MODEL>
 python -m adapters.cli config set models.writer.secret_reference <REF>
 ```
 
+### Writer：从资料到 AI 草稿（M5）
+
+先准备章细纲、人物、世界观与写作规则。可离线检查 Writer 实际会看到哪些资料；只有显式 `--show-text` 才输出完整渲染上下文。
+
+```bash
+# 1) 离线预算与来源清单（不调用 LLM）
+python -m adapters.cli context plan my-novel --chapter 2
+
+# 2) Chief 规划 + Writer 流式写作；默认写 current_chapter + 1
+python -m adapters.cli write my-novel --instruction "沈砚第一次进入鹤梁山"
+
+# 3) 查看 canonical AI draft
+python -m adapters.cli draft list my-novel
+python -m adapters.cli draft show my-novel 2
+
+# 4) 对已有 AI draft 续写或完整改写
+python -m adapters.cli write my-novel 2 --continue --instruction "写到发现契纹为止"
+python -m adapters.cli write my-novel 2 --rewrite --instruction "开头更快进入冲突"
+
+# 5) 中断后检查并跨进程恢复 partial
+python -m adapters.cli draft partial list my-novel
+python -m adapters.cli write my-novel 2 --resume
+
+# 6) rewrite/continue 均进入现有 history，可撤销
+python -m adapters.cli undo-last-change my-novel
+```
+
+`--show-plan` 展示 Chief TaskCard；`--plan-only` 只规划、不写项目；`--show-context` 只列 context manifest；`--no-stream` 等完整正文后再显示结果。Writer 正文生成中只追加到 `drafts/.generation/`，成功后才通过 revision guard + Snapshot 原子落入 canonical draft。
+
+M5 的 AI draft 不能直接 `chapter confirm`。它必须等待 M6 Reviewer 将状态推进到 READY；手动草稿仍保持原有确认流程。
+
 ## 数据在哪里
 
 ```
@@ -200,8 +231,8 @@ data/novels/<project_id>/
 
 ## 当前尚未实现
 
-- Writer / Reviewer Agent 与章节正文生成（M5+，尚未授权）
-- 动态 ContextBudget、自动摘要与长文本多级裁剪（M5+）
+- Reviewer Agent 与 AI 草稿的 REVIEWING → READY 流程（M6，尚未授权）
+- 自动摘要与更高级的长文本多级裁剪
 - 聊天历史持久化 / 多轮会话(当前每轮独立请求; 主编多轮仅内存)
 - 自动发布/手机端/会员 — 不在路线图
 

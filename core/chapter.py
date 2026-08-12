@@ -92,7 +92,8 @@ def build_frontmatter(meta: dict[str, Any]) -> str:
 
     安全规则: 标量值不得含 CR/LF(否则生成的文件自己读不回来)。
     """
-    order = ["chapter", "volume", "title", "status", "origin", "words", "created_at", "updated_at", "summary", "characters"]
+    order = ["chapter", "volume", "title", "status", "origin", "words", "created_at", "updated_at", "summary", "characters",
+             "generation_state", "generation_mode", "generation_model", "context_hash", "task_hash"]
     lines = ["---"]
     for key in order:
         if key not in meta:
@@ -320,6 +321,12 @@ def update_draft(project: Project, number: int, title: Optional[str] = None,
 
 
 def confirm_draft(project: Project, number: int) -> Chapter:
+    from .locks import chapter_lock
+    with chapter_lock(project, number):
+        return _confirm_draft_locked(project, number)
+
+
+def _confirm_draft_locked(project: Project, number: int) -> Chapter:
     """手动确认草稿 — 文件事务式多文件操作。
 
     事务边界: drafts/chNNNN.draft.md + chapters/chNNNN.md + project.json + history。
@@ -447,6 +454,8 @@ def list_chapters(project: Project) -> list[dict[str, Any]]:
                     "chapter": n, "title": meta.get("title", ""),
                     "status": meta.get("status", "?"), "words": int(meta.get("words", 0)),
                     "updated_at": meta.get("updated_at", ""), "location": "draft",
+                    "origin": meta.get("origin", ""),
+                    "generation_state": meta.get("generation_state", ""),
                 })
             except (DataIntegrityError, StorageError):
                 add_entry(n, {

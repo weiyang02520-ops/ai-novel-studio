@@ -95,13 +95,25 @@ ai-novel-studio/
 - **transaction order**: validate → safe_path → bytes/revision/no-op → prepare_snapshot → atomic write → history commit → final bytes verify；失败 restore/discard；失败的 rollback 报 `ROLLBACK_FAILED`。
 - **FACT_SOURCE hierarchy**: outline/characters/world/rules/confirmed chapters 是事实源；memory 永远是 DERIVED_MEMORY，不能反向自动改正式设定。
 - **Knowledge Doctor is read-only**: 只报告结构事实，不评分、不修复。
-- **ContextCollector shared foundation**: M3 weak fallback 与未来 M5 共用 `core.context`；默认不收集章节正文；动态 Writer budget 仍属 M5。
-- **Writer remains forbidden**: Chief 不拥有 write chapter/confirm/reviewer/delete/shell 权限，M5 未授权。
+- **ContextCollector shared foundation**: M3 weak fallback 与 M5 Writer 共用 `core.context`；默认不收集章节正文。
+- **Chief mutation boundary remains narrow**: Chief chat 不拥有 write chapter/confirm/reviewer/delete/shell 权限；正文写作只由 M5 workflow 调用 Writer。
 - **Agent-facing reads are safe-path resolved**: exact lookup、H1 scan、search、CLI、doctor、context 与章节枚举在最终读取前均经过 `safe_path` 或 `safe_markdown_files`；项目外 symlink 不得泄漏内容。
 - **memory revision contract**: `MEMORY_KINDS` 与 `memory_target_for_kind` 是 read/write 单一映射；Chief 保存前后必须 `read_memory`。
 - **race hardening**: initial revision check + snapshot 后 writer 前 immediate byte recheck；race 时只 discard，绝不 restore 外部新内容。该语义是 optimistic concurrency，不是数据库 serializable transaction。
 - **identity/no-op**: existing character/world 的 H1 必须稳定；no-op 是正常 `NO_CHANGE` 结果且不写 history。
 - **project Chief routing**: tool_calls=true 时所有 project chat 使用完整 M4 registry；CLI 不做关键词/substring capability routing。tool_calls=false 永远无工具，并注入 `MUTATION_CAPABILITY: DISABLED`。
+
+## M5 Writer 稳定规则(稳定)
+- Writer 只输出正文且 AgentDef 工具列表为空；workflow 独占 canonical draft persistence。
+- AI draft 固定 `origin=ai, status=draft`；M6 前不可 confirm，手动与 AI draft 路径保持分离。
+- 每次 Writer 调用前必须构建 ContextBudget；默认永不自动注入全书正文。
+- Chief TaskCard 使用严格 JSON schema、一次 repair 与确定性 fallback；TaskCard/hash 不含 secret。
+- 生成中内容只追加到 `drafts/.generation/`；完整或 length-truncated 后才 finalize canonical。
+- interruption 保留非 canonical partial；空 partial 清理；resume 跨进程复用 TaskCard 并重建当前 context。
+- rewrite/continue/resume 使用原始 bytes revision guard + Snapshot；外部/用户 draft 修改在 stale race 中获胜。
+- canonical AI finalize、manual confirm 与 partial prepare 使用同一章级跨进程文件锁，封闭本应用并发 TOCTOU。
+- Writer 首次无正文 `CONTEXT_TOO_LONG` 只缩 budget 重试一次；已有正文后绝不从头重试。
+- Reviewer 仍属未来 M6：`DRAFT → REVIEWING → READY`，M6 NOT AUTHORIZED。
 
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)
