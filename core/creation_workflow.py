@@ -4,11 +4,14 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import hashlib
+import uuid
 from typing import Callable
 
 from llm.types import Usage
 
 from .chapter import confirmed_path, draft_path, parse_frontmatter
+from .compose_state import ComposeRunState, ComposeRunStore, ComposeStateError
+from .generation import GenerationWorkspace
 from .mutation import file_revision
 from .review import ReviewError, load_review_artifact, require_current_pass_report
 from .review_workflow import ReviewWorkflowRequest
@@ -100,6 +103,26 @@ def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def _instruction_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _model_name(owner, provider_name: str) -> str:
+    provider = getattr(owner, provider_name, None)
+    return str(getattr(getattr(provider, "config", None), "model", "") or "")
+
+
+def _report_from_artifact(artifact):
+    from agents.review_report import parse_review_report
+    import json
+    fields = {key: artifact[key] for key in (
+        "chapter", "verdict", "summary", "issues", "strengths", "task_fulfillment",
+        "continuity_assessment", "style_assessment", "logic_assessment", "confidence",
+        "source",
+    )}
+    return parse_review_report(json.dumps(fields, ensure_ascii=False)).report
+
+
 class CreationWorkflow:
     def __init__(self, *, write_workflow_factory: Callable[[object], object],
                  review_workflow_factory: Callable[[object], object], settings=None,
@@ -107,11 +130,31 @@ class CreationWorkflow:
         self.write_workflow_factory = write_workflow_factory
         self.review_workflow_factory = review_workflow_factory
         self.settings = settings
-        self.state_store_factory = state_store_factory  # reserved for resume integration
+        self.state_store_factory = state_store_factory or ComposeRunStore
+
+    def _save_phase(self, phase: str, **changes) -> None:
+        if self._run_state is None:
+            return
+        changes.setdefault("updated_at", _now())
+        changes.setdefault("draft_revision", file_revision(
+            draft_path(self._project, self._run_state.chapter)))
+        self._run_state = dataclasses.replace(self._run_state, phase=phase, **changes)
+        self._run_store.save(self._run_state)
+
+    def _blocked(self, chapter: int, reason: str) -> CreationResult:
+        self._save_phase("BLOCKED")
+        return self._result(chapter, "BLOCKED", "BLOCKED", reason=reason)
 
     def _result(self, chapter, status, final_state, *, rounds=None, chief=None, writer=None,
                 reviewer=None, warnings=None, reason="", report_hash="", verdict=""):
         revision = file_revision(draft_path(self._project, chapter))
+        if getattr(self, "_run_store", None) is not None:
+            if final_state == "READY":
+                self._run_store.reset()
+                self._run_state = None
+            elif final_state == "ESCALATED" and self._run_state is not None:
+                self._save_phase("ESCALATED", latest_report_hash=report_hash,
+                                 latest_verdict=verdict)
         return CreationResult(chapter, status, len(rounds or []), revision, report_hash,
                               verdict, final_state, rounds or [], chief or [], writer or [],
                               reviewer or [], warnings or [], reason)
@@ -120,6 +163,7 @@ class CreationWorkflow:
         code = getattr(exc, "code", "")
         if code not in STALE_CODES:
             raise exc
+        self._save_phase("BLOCKED")
         return self._result(chapter, "BLOCKED", "BLOCKED", rounds=rounds,
                             chief=chief, writer=writer, reviewer=reviewer,
                             warnings=warnings, reason=code)
@@ -134,8 +178,8 @@ class CreationWorkflow:
         max_rounds = request.max_review_rounds if request.max_review_rounds is not None else configured
         if not isinstance(max_rounds, int) or isinstance(max_rounds, bool) or not 1 <= max_rounds <= 10:
             raise CreationWorkflowError("INVALID_MAX_REVIEW_ROUNDS", "max rounds must be 1..10")
-        if request.resume:
-            raise CreationWorkflowError("RESUME_NOT_IMPLEMENTED", "resume integration is separate")
+        self._run_store = self.state_store_factory(project, chapter)
+        self._run_state = None
         if confirmed_path(project, chapter).exists():
             return self._result(chapter, "ALREADY_CONFIRMED", "BLOCKED")
 
@@ -150,6 +194,7 @@ class CreationWorkflow:
                 except ReviewError:
                     return self._result(chapter, "READY_REVIEW_INVALID", "BLOCKED",
                                         reason="STALE_WORKFLOW_STATE")
+                self._run_store.reset()
                 return self._result(chapter, "READY", "READY",
                                     report_hash=artifact["report_hash"], verdict="PASS")
             if meta.get("status") != "draft":
@@ -157,19 +202,137 @@ class CreationWorkflow:
 
         writer_flow = self.write_workflow_factory(project)
         review_flow = self.review_workflow_factory(project)
+        models = {
+            "chief": _model_name(writer_flow, "chief_provider"),
+            "writer": _model_name(writer_flow, "writer_provider"),
+            "reviewer": _model_name(review_flow, "provider"),
+        }
+        resume_state = None
+        if request.resume:
+            try:
+                resume_state = self._run_store.require()
+            except ComposeStateError as exc:
+                raise CreationWorkflowError(exc.code, exc.message) from exc
+            self._run_state = resume_state
+            if resume_state.initial_instruction_hash != _instruction_hash(request.instruction):
+                return self._blocked(chapter, "COMPOSE_INSTRUCTION_MISMATCH")
+            if request.max_review_rounds is not None and max_rounds != resume_state.max_rounds:
+                return self._blocked(chapter, "COMPOSE_MAX_ROUNDS_MISMATCH")
+            if request.max_review_rounds is None and configured != resume_state.max_rounds:
+                return self._blocked(chapter, "COMPOSE_MAX_ROUNDS_MISMATCH")
+            max_rounds = resume_state.max_rounds
+            if models != resume_state.models:
+                return self._blocked(chapter, "COMPOSE_MODEL_CONFIG_MISMATCH")
+            if resume_state.phase in {"ESCALATED", "BLOCKED", "INTERRUPTED"}:
+                return self._blocked(chapter, "COMPOSE_RUN_NOT_RESUMABLE")
+        else:
+            if self._run_store.exists():
+                self._run_state = self._run_store.require()
+                return self._blocked(chapter, "COMPOSE_RUN_EXISTS")
+            started = _now()
+            self._run_state = ComposeRunState(
+                chapter=chapter, run_id=uuid.uuid4().hex, phase="INITIAL_WRITE",
+                max_rounds=max_rounds, review_round=0,
+                draft_revision=file_revision(target), latest_report_hash="",
+                latest_verdict="", issue_fingerprints=(), started_at=started,
+                updated_at=started, writer_mode="new" if not target.exists() else "",
+                models=models, initial_instruction_hash=_instruction_hash(request.instruction),
+            )
+            self._run_store.save(self._run_state)
         rounds: list[CreationRound] = []
         chief_usages: list[Usage] = []
         writer_usages: list[Usage] = []
         reviewer_usages: list[Usage] = []
         warnings: list[str] = []
         writer_mode, writer_model = "", ""
-        previous_fingerprints: tuple[str, ...] = ()
+        previous_fingerprints: tuple[str, ...] = (
+            tuple(resume_state.issue_fingerprints) if resume_state else ())
+        completed_reviews = resume_state.review_round if resume_state else 0
 
-        if not target.exists():
+        if resume_state is not None:
+            current_revision = file_revision(target)
+            if current_revision != resume_state.draft_revision:
+                return self._blocked(chapter, "STALE_WORKFLOW_STATE")
+            if resume_state.latest_report_hash:
+                try:
+                    stored_artifact = load_review_artifact(project, chapter)
+                except ReviewError:
+                    return self._blocked(chapter, "COMPOSE_REPORT_MISMATCH")
+                if stored_artifact["report_hash"] != resume_state.latest_report_hash:
+                    return self._blocked(chapter, "COMPOSE_REPORT_MISMATCH")
+                current_report_required = (
+                    resume_state.phase == "WAITING_REWRITE"
+                    or (resume_state.phase == "WRITER_INTERRUPTED"
+                        and resume_state.writer_mode == "rewrite"))
+                if (current_report_required
+                        and stored_artifact["draft_revision"] != current_revision):
+                    return self._blocked(chapter, "COMPOSE_REPORT_MISMATCH")
+            if resume_state.phase == "WRITER_INTERRUPTED":
+                workspace = GenerationWorkspace(project, chapter)
+                if not workspace.partial.is_file() or not workspace.sidecar.is_file():
+                    return self._blocked(chapter, "COMPOSE_PARTIAL_NOT_FOUND")
+                try:
+                    partial_meta = workspace.metadata()
+                except Exception:
+                    return self._blocked(chapter, "INVALID_PARTIAL_SIDECAR")
+                if (partial_meta.get("mode") != resume_state.writer_mode
+                        or partial_meta.get("base_revision") != resume_state.draft_revision):
+                    return self._blocked(chapter, "STALE_WORKFLOW_STATE")
+                resume_feedback = None
+                if resume_state.writer_mode == "rewrite":
+                    try:
+                        artifact = load_review_artifact(project, chapter)
+                    except ReviewError:
+                        return self._blocked(chapter, "COMPOSE_REPORT_MISMATCH")
+                    if (artifact["verdict"] != "NEEDS_WORK"
+                            or artifact["report_hash"] != resume_state.latest_report_hash
+                            or artifact["draft_revision"] != resume_state.draft_revision):
+                        return self._blocked(chapter, "COMPOSE_REPORT_MISMATCH")
+                    resume_feedback = build_revision_feedback(
+                        _report_from_artifact(artifact),
+                        review_report_hash=artifact["report_hash"],
+                        draft_revision=artifact["draft_revision"],
+                        round_number=max(1, resume_state.review_round),
+                    )
+                try:
+                    written = writer_flow.run(WriteRequest(
+                        project, chapter, request.instruction, request.title,
+                        request.target_chars, request.characters, request.world,
+                        "resume", stream=request.stream,
+                        revision_feedback=resume_feedback))
+                except KeyboardInterrupt:
+                    self._save_phase("WRITER_INTERRUPTED",
+                                     writer_mode=resume_state.writer_mode)
+                    raise
+                except Exception as exc:
+                    return self._stale_result(
+                        exc, chapter, rounds=rounds, chief=chief_usages,
+                        writer=writer_usages, reviewer=reviewer_usages, warnings=warnings)
+                chief_usages.extend(written.chief_usages)
+                writer_usages.extend(written.writer_usages)
+                warnings.extend(getattr(written, "warnings", []))
+                if written.status == "interrupted":
+                    self._save_phase("WRITER_INTERRUPTED",
+                                     writer_mode=resume_state.writer_mode)
+                    return self._result(
+                        chapter, "WRITER_INTERRUPTED", "INTERRUPTED",
+                        chief=chief_usages, writer=writer_usages, warnings=warnings,
+                        report_hash=resume_state.latest_report_hash,
+                        verdict=resume_state.latest_verdict)
+                writer_mode = "resume"
+                writer_model = getattr(written.writer_result, "model", "")
+                self._save_phase(
+                    "WAITING_REREVIEW" if completed_reviews else "WAITING_REVIEW",
+                    writer_mode="resume")
+
+        if not target.exists() and not request.resume:
             try:
                 written = writer_flow.run(WriteRequest(
                     project, chapter, request.instruction, request.title, request.target_chars,
                     request.characters, request.world, "new", stream=request.stream))
+            except KeyboardInterrupt:
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="new")
+                raise
             except Exception as exc:
                 return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
                                           writer=writer_usages, reviewer=reviewer_usages,
@@ -177,21 +340,20 @@ class CreationWorkflow:
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="new")
                 return self._result(chapter, "WRITER_INTERRUPTED", "INTERRUPTED",
                                     chief=chief_usages, writer=writer_usages, warnings=warnings)
             writer_mode, writer_model = "new", getattr(written.writer_result, "model", "")
+            self._save_phase("WAITING_REVIEW", writer_mode="new")
+        elif target.exists() and resume_state is None:
+            self._save_phase("WAITING_REVIEW", writer_mode="")
 
         # A current NEEDS_WORK artifact may be consumed without spending another review call.
         pending = None
         try:
             artifact = load_review_artifact(project, chapter)
             if artifact["draft_revision"] == file_revision(target) and artifact["verdict"] == "NEEDS_WORK":
-                from agents.review_report import parse_review_report
-                import json
-                fields = {k: artifact[k] for k in (
-                    "chapter", "verdict", "summary", "issues", "strengths", "task_fulfillment",
-                    "continuity_assessment", "style_assessment", "logic_assessment", "confidence", "source")}
-                pending = (parse_review_report(json.dumps(fields, ensure_ascii=False)).report,
+                pending = (_report_from_artifact(artifact),
                            artifact["report_hash"], artifact["draft_revision"])
         except ReviewError:
             pass
@@ -208,13 +370,20 @@ class CreationWorkflow:
                                     verdict="NEEDS_WORK")
             feedback = build_revision_feedback(
                 report, review_report_hash=report_hash, draft_revision=draft_revision,
-                round_number=1)
+                round_number=max(1, completed_reviews))
             before_body = _body_hash(project, chapter)
+            self._save_phase(
+                "WAITING_REWRITE", review_round=completed_reviews,
+                latest_report_hash=report_hash, latest_verdict="NEEDS_WORK",
+                issue_fingerprints=previous_fingerprints, writer_mode="rewrite")
             try:
                 written = writer_flow.run(WriteRequest(
                     project, chapter, request.instruction, request.title, request.target_chars,
                     request.characters, request.world, "rewrite", stream=request.stream,
                     revision_feedback=feedback))
+            except KeyboardInterrupt:
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="rewrite")
+                raise
             except Exception as exc:
                 return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
                                           writer=writer_usages, reviewer=reviewer_usages,
@@ -222,6 +391,7 @@ class CreationWorkflow:
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="rewrite")
                 return self._result(chapter, "WRITER_INTERRUPTED", "INTERRUPTED",
                                     chief=chief_usages, writer=writer_usages, warnings=warnings,
                                     report_hash=report_hash, verdict="NEEDS_WORK")
@@ -231,10 +401,14 @@ class CreationWorkflow:
                                     reason="WRITER_NO_EFFECT", report_hash=report_hash,
                                     verdict="NEEDS_WORK")
             writer_mode, writer_model = "rewrite", getattr(written.writer_result, "model", "")
+            self._save_phase("WAITING_REREVIEW", writer_mode="rewrite")
             pending = None
 
-        for review_round in range(1, max_rounds + 1):
+        for review_round in range(completed_reviews + 1, max_rounds + 1):
             round_started = _now()
+            self._save_phase(
+                "WAITING_REVIEW" if review_round == 1 else "WAITING_REREVIEW",
+                review_round=review_round - 1)
             try:
                 reviewed = review_flow.run(ReviewWorkflowRequest(
                     project, chapter, request.review_instruction,
@@ -254,6 +428,12 @@ class CreationWorkflow:
                 review_round, before_review, draft_revision, report_hash, report.verdict,
                 _counts(report), writer_mode, writer_model, reviewer_model,
                 round_started, _now()))
+            completed_reviews = review_round
+            current_fingerprints = major_blocker_fingerprints(report)
+            self._save_phase(
+                "WAITING_REWRITE", review_round=review_round,
+                latest_report_hash=report_hash, latest_verdict=report.verdict,
+                issue_fingerprints=current_fingerprints)
 
             if report.verdict == "PASS":
                 return self._result(chapter, "READY", "READY", rounds=rounds,
@@ -268,7 +448,7 @@ class CreationWorkflow:
                                     chief=chief_usages, writer=writer_usages,
                                     reviewer=reviewer_usages, warnings=warnings, reason=reason,
                                     report_hash=report_hash, verdict="NEEDS_WORK")
-            fingerprints = major_blocker_fingerprints(report)
+            fingerprints = current_fingerprints
             if is_stalled_review(previous_fingerprints, fingerprints):
                 return self._result(chapter, "ESCALATED", "ESCALATED", rounds=rounds,
                                     chief=chief_usages, writer=writer_usages,
@@ -297,6 +477,9 @@ class CreationWorkflow:
                     project, chapter, request.instruction, request.title, request.target_chars,
                     request.characters, request.world, "rewrite", stream=request.stream,
                     revision_feedback=feedback))
+            except KeyboardInterrupt:
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="rewrite")
+                raise
             except Exception as exc:
                 return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
                                           writer=writer_usages, reviewer=reviewer_usages,
@@ -304,6 +487,7 @@ class CreationWorkflow:
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
+                self._save_phase("WRITER_INTERRUPTED", writer_mode="rewrite")
                 return self._result(chapter, "WRITER_INTERRUPTED", "INTERRUPTED", rounds=rounds,
                                     chief=chief_usages, writer=writer_usages,
                                     reviewer=reviewer_usages, warnings=warnings)
@@ -314,6 +498,7 @@ class CreationWorkflow:
                                     reason="WRITER_NO_EFFECT", report_hash=report_hash,
                                     verdict="NEEDS_WORK")
             writer_mode, writer_model = "rewrite", getattr(written.writer_result, "model", "")
+            self._save_phase("WAITING_REREVIEW", writer_mode="rewrite")
             if rounds:
                 rounds[-1] = dataclasses.replace(rounds[-1],
                     draft_revision_before=before_revision,
