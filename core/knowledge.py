@@ -191,6 +191,40 @@ def doctor(project: Project) -> list[dict[str, str]]:
                     else:
                         code = "AI_READY_REVIEW_INVALID"
                     add("ERROR", code, f"{path.name}: {exc}")
+    # M7 compose sidecars are privacy-safe orchestration hints, never canonical truth.
+    # Diagnose them without repairing or deleting user state.
+    runs_dir = project.dir / "workflow" / ".runs"
+    if runs_dir.is_symlink():
+        add("ERROR", "UNSAFE_COMPOSE_RUN_PATH", "workflow/.runs contains a symlink")
+    elif runs_dir.exists():
+        from .compose_state import ComposeRunStore, ComposeStateError
+        import re
+        for run_path in sorted(runs_dir.glob("*.compose.json")):
+            match = re.fullmatch(r"ch(\d{4})\.compose\.json", run_path.name)
+            if run_path.is_symlink():
+                add("ERROR", "UNSAFE_COMPOSE_RUN_PATH", run_path.name)
+                continue
+            if match is None:
+                add("WARNING", "INVALID_COMPOSE_RUN_NAME", run_path.name)
+                continue
+            chapter = int(match.group(1))
+            try:
+                state = ComposeRunStore(project, chapter).require()
+            except ComposeStateError as exc:
+                add("WARNING", exc.code, f"{run_path.name}: {exc.message}")
+                continue
+            draft = project.dir / f"drafts/ch{chapter:04d}.draft.md"
+            confirmed = project.dir / f"chapters/ch{chapter:04d}.md"
+            if not draft.exists() and not confirmed.exists():
+                add("WARNING", "ORPHAN_COMPOSE_RUN", run_path.name)
+            if state.phase == "READY":
+                try:
+                    meta, _ = parse_frontmatter(draft.read_text(encoding="utf-8"))
+                    canonical_ready = meta.get("origin") == "ai" and meta.get("status") == "ready"
+                except (OSError, UnicodeError, DataIntegrityError):
+                    canonical_ready = False
+                if not canonical_ready:
+                    add("WARNING", "COMPOSE_READY_STATE_MISMATCH", run_path.name)
     # Explicitly report symlinks that cannot stay inside the project.
     for path in project.dir.rglob("*"):
         if path.is_symlink():
