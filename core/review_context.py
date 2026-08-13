@@ -47,7 +47,8 @@ class ReviewContextPlan:
 
     @property
     def draft_truncated(self) -> bool:
-        return any(x.type == "REVIEW_DRAFT" for x in self.shared.truncated_items)
+        return any(x.type == "REVIEW_DRAFT" and x.was_truncated
+                   for x in self.shared.selected_items)
 
     def shrink(self, factor: float = 0.65) -> "ReviewContextPlan":
         return dataclasses.replace(self, shared=self.shared.shrink(factor))

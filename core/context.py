@@ -19,6 +19,7 @@ class ContextItem:
     chars: int
     estimated_tokens: int
     revision: Optional[str] = None
+    was_truncated: bool = False
 
 
 def _item(project: Project, rel: str, typ: str, priority: int) -> Optional[ContextItem]:

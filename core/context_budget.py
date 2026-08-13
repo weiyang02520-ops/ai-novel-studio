@@ -35,6 +35,7 @@ class PlannedContextItem:
     status: str
     text: str
     revision: str | None = None
+    was_truncated: bool = False
 
 
 @dataclasses.dataclass
@@ -62,6 +63,7 @@ class ContextBudgetPlan:
             reduced.append(ContextItem(
                 item.source, item.type, item.priority, text, item.original_chars,
                 BaseProvider.estimate_tokens(text), item.revision,
+                item.was_truncated or len(text) < item.original_chars,
             ))
         return plan_context(
             reduced,
@@ -146,6 +148,7 @@ def _planned(item: ContextItem, text: str, status: str, profile: str) -> Planned
     return PlannedContextItem(
         item.source, item.type, _priority(item, profile), item.chars,
         len(text), BaseProvider.estimate_tokens(text), status, text, item.revision,
+        item.was_truncated or status == "TRUNCATE" or len(text) < item.chars,
     )
 
 

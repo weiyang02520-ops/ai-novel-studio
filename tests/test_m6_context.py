@@ -150,6 +150,24 @@ def test_huge_review_draft_uses_deterministic_head_middle_tail_marker(project):
     assert preflight.can_review and not preflight.can_ready
 
 
+def test_full_review_draft_shrink_preserves_explicit_truncation_provenance(project):
+    plan = builder(16_000, reserve_output_tokens=600).build(project, 1)
+    original = next(x for x in plan.selected_items if x.type == "REVIEW_DRAFT")
+    assert original.status == "KEEP"
+    assert not original.was_truncated
+    assert not plan.draft_truncated
+
+    shrunk = plan.shrink(0.65)
+    draft = next(x for x in shrunk.selected_items if x.type == "REVIEW_DRAFT")
+    assert draft.was_truncated
+    assert draft.original_chars == original.original_chars
+    assert draft.included_chars < draft.original_chars
+    assert shrunk.draft_truncated
+    preflight = ReviewPreflight().run(project, 1, context_plan=shrunk)
+    assert any(x.code == "DRAFT_TRUNCATED_FOR_REVIEW" for x in preflight.blockers)
+    assert not preflight.can_ready
+
+
 def test_review_preflight_happy_missing_outline_and_issue_merge(project):
     result = ReviewPreflight().run(project, 1)
     assert result.can_review and result.can_ready
