@@ -29,8 +29,8 @@ M0(工程骨架/配置系统/SecretStore/CLI)经 External ChatGPT 两轮审核�
 ## [DESIGN_DECISION] Milestone 批量执行工作方式
 里程碑(M1 起)采用完整 Batch 执行: 实现→测试→自修 bug→回归→集成验收→checkpoint→push→等待外部审核。不逐子任务往返。
 
-## [DESIGN_DECISION] 章节状态机(手动路径)
-DRAFT → USER_CONFIRMED → CONFIRMED(手动章节); AI 章节(M5)必须 DRAFT → REVIEWING → READY → USER_CONFIRMED → CONFIRMED, 禁止绕过 Reviewer。auto_accept 默认 false。
+## [DESIGN_DECISION] 章节状态机与 M6 方案 B
+DRAFT → USER_CONFIRMED → CONFIRMED(手动章节)。AI 章节由 Writer 生成 DRAFT；M6 REVIEWING 仅是进程内 Workflow run state，不写 frontmatter/pending sidecar；PASS 后成为 READY，最后仍由用户显式 confirm 成 CONFIRMED。`review recover` 返回 `NO_PENDING_REVIEW`。auto_accept 默认 false。
 
 ## [DESIGN_DECISION] SecretStore
 真实 API Key 只存系统凭据管理器(Windows Credential Manager / keyring), 环境变量为开发回退。settings.json 只存 secret_reference。Key 绝不进入 Git/日志/交接文档。
@@ -42,13 +42,16 @@ DRAFT → USER_CONFIRMED → CONFIRMED(手动章节); AI 章节(M5)必须 DRAFT 
 Chief 对大纲、人物、世界观、派生记忆的 AI 写入统一经过 MutationService。每个 LLM batch 最多一个 mutation；原始 bytes SHA256 乐观锁防覆盖；现有 Snapshot/history 是唯一 undo/audit 数据源；no-op 不留历史。
 
 ## [DESIGN_DECISION] Knowledge 与 Context 基础
-Knowledge Doctor 只读且不评分。FACT_SOURCE 高于 DERIVED_MEMORY。ContextCollector 是 M3 weak fallback 与未来 M5 Writer 共用的资料来源层；M4 不包含动态 Writer budget，也不生成章节正文。
+Knowledge Doctor 只读且不评分。FACT_SOURCE 高于 DERIVED_MEMORY。ContextCollector 是 Chief fallback、Writer 与 Reviewer 共用的资料来源层；Writer/Reviewer 使用严格 model-window budget，默认不注入全书正文。
 
 ## [DESIGN_DECISION] M4 Final Hardening
 所有 project Chief chat 在支持工具时统一获得完整 M4 registry，不做关键词能力路由；弱模型显式只读。Memory read/write 共用 kind-target 映射。Mutation 在 snapshot 后 writer 前立即重检原始字节，race 时只 discard 而不 restore。人物/世界观 H1 是稳定 identity；no-op 为正常结果且不写 history。
 
 ## [DESIGN_DECISION] M5 Writer
-M5 Writer generates revision-protected AI drafts from bounded project context; Reviewer remains M6.
+M5 Writer generates revision-protected AI drafts from bounded project context；只生成 `origin=ai,status=draft`，不拥有 review/ready/confirm。
 
 ## [DESIGN_DECISION] M5 Final Closeout
-Chief planning and Writer input are independently bounded; partial resume metadata is prompt-redacted; `--no-stream` uses a true non-stream Provider call. Confirm structurally permits AI only at READY while preserving AI origin, but M5 exposes no READY transition and Reviewer remains unauthorized M6 work.
+Chief planning and Writer input are independently bounded; partial resume metadata is prompt-redacted; `--no-stream` uses a true non-stream Provider call. Confirm permits AI only at READY while preserving AI origin。
+
+## [DESIGN_DECISION] M6 Reviewer
+M6 implementation complete，等待 External ChatGPT M6 review。Reviewer read/analyze only，无工具且不改正文；ReviewService 独占 report/status persistence。PASS 要求无 BLOCKER/MAJOR，任何 Provider/parser/context/preflight/transaction 不确定性 fail-closed。Report 绑定精确 draft revision，READY 必须有 current matching strict PASS artifact；PASS 不自动 confirm。Reviewer context bounded 且不注入全书，截断不能 READY。M7 自动 Writer↔Reviewer loop、自动 confirm 与 post-confirm memory **NOT AUTHORIZED**。

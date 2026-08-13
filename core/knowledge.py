@@ -146,7 +146,7 @@ def doctor(project: Project) -> list[dict[str, str]]:
         except UnicodeError:
             rel = path.relative_to(project.dir).as_posix()
             add("WARNING" if rel.startswith("memory/") else "ERROR", "INVALID_UTF8", rel)
-    # M5 AI drafts stay draft-only until the future Reviewer owns READY transitions.
+    # M6 Reviewer owns AI READY transitions; Doctor validates the matching report below.
     drafts_dir = project.store.safe_path(project.id, "drafts")
     if drafts_dir.exists():
         from .chapter import parse_frontmatter

@@ -6,7 +6,7 @@ M6 adds a read/analyze-only Reviewer gate between an AI draft and explicit user 
 
 ## Considered architectures
 
-1. **Sidecar run state + short revision-guarded transactions (selected).** The canonical draft stays `status=draft` while the network call runs. `review/.runs/chNNNN.pending.json` represents REVIEWING without prose or prompt data. Begin and finalize each take a short chapter lock and compare exact raw-byte revisions. This gives crash recovery without holding a lock across HTTP.
+1. **In-memory run state + short revision-guarded transactions (selected, Architecture B).** The canonical draft stays `status=draft` while the network call runs. REVIEWING is process-local; no pending sidecar is persisted. Begin and finalize each take a short chapter lock and compare exact raw-byte revisions. A crash leaves canonical files unchanged, so recover returns `NO_PENDING_REVIEW`.
 2. **Persist `status=reviewing` in the draft.** This makes the state visible in frontmatter, but creates an extra draft revision, more rollback paths, and a higher chance of a stranded canonical file after interruption.
 3. **Hold the chapter lock across the Provider call.** This is simple but blocks writers and user operations for an unbounded network duration and is rejected by the specification.
 
@@ -16,30 +16,30 @@ M6 adds a read/analyze-only Reviewer gate between an AI draft and explicit user 
 - `agents/reviewer.py`: provider-independent non-stream `ReviewerRunner`; `tools=None`; one schema-only JSON repair; no persistence.
 - `core/review_context.py`: review-specific source collection and rendering while reusing `core.context_budget.plan_context`; the draft receives highest priority and oversized drafts use deterministic head/middle/tail slices marked `DRAFT_TRUNCATED_FOR_REVIEW`.
 - `core/review_preflight.py`: deterministic integrity checks merged with model issues. Deterministic BLOCKER/MAJOR findings cannot be erased by the model.
-- `core/review.py`: `ReviewService` owns pending run metadata, exact-revision begin/finalize, report persistence, snapshot/history rollback, stale detection, recover, reopen, and inspection.
+- `core/review.py`: `ReviewService` owns in-memory run guards, exact-revision begin/finalize, report persistence, snapshot/history rollback, stale detection, no-pending recover, reopen, and inspection.
 - `adapters/cli/m6.py`: display/callback-only review adapter. `adapters/cli/main.py` only parses and routes.
 
 ## Data flow
 
 1. Resolve an AI `status=draft`, capture exact raw bytes and revision, run deterministic preflight, resolve relevant entities, and build a strict context plan.
 2. `--plan-only` stops here with zero Provider/status/report/history mutation.
-3. Under a short chapter lock, recheck the revision and atomically create a redacted pending sidecar.
+3. Under a short chapter lock, recheck the revision and register a process-local run guard; do not mutate canonical draft/report files.
 4. Release the lock and call Reviewer once. On the first context overflow rebuild at `0.65` and retry once. On malformed JSON perform one schema-only repair.
 5. Merge deterministic and model issues, normalize verdict, and bind the canonical report to the original exact draft revision and context hash.
-6. Under a short lock, recheck draft and prior-report revisions. A mismatch returns a stale result with zero overwrite. Otherwise snapshot draft/report, atomically persist report and status transition, commit history, verify bytes, then remove pending metadata.
+6. Under a short lock, recheck draft and prior-report revisions. A mismatch returns a stale result with zero overwrite. Otherwise snapshot draft/report, atomically persist report and status transition, commit history, verify bytes, then release the in-memory run guard.
 7. PASS produces `ready`; NEEDS_WORK or any deterministic blocker produces `draft`. No path confirms a chapter or calls Writer.
 
 ## Failure and recovery rules
 
 - Any Provider, parser, repair, context, interruption, revision, report-race, or transaction uncertainty is fail-closed: never READY.
 - Cleanup/rollback uses compare-and-swap semantics and never restores over external bytes.
-- A crash leaves only redacted pending metadata; `review recover` removes it only when its recorded draft revision still matches, otherwise reports stale and preserves user files.
+- A crash leaves no persisted REVIEWING/pending metadata and canonical files remain unchanged; `review recover` returns `NO_PENDING_REVIEW`.
 - A truncated draft cannot prove PASS and is normalized to NEEDS_WORK with a contextual limitation issue.
 - Report JSON is capped before parsing/persistence; evidence is capped at 300 characters and usage logs never receive prose, report, prompt, or context.
 
 ## State and confirmation boundary
 
-The externally observable state machine is `draft -> REVIEWING(run sidecar) -> ready|draft`. READY is valid only when the latest report is PASS, contains no BLOCKER/MAJOR, and is bound to the current exact draft revision. Existing explicit `chapter confirm` remains the only path to `confirmed`.
+The canonical state remains `draft` during review, then becomes `ready` only at a successful final transaction (or remains `draft`). REVIEWING is process-local, not persisted frontmatter. READY is valid only when the latest report is PASS, contains no BLOCKER/MAJOR, and is bound to the current exact draft revision. Explicit `chapter confirm` remains the only path to `confirmed`.
 
 ## Verification strategy
 

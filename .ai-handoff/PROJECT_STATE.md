@@ -8,66 +8,58 @@
 
 ## phase
 
-**M5 FINAL CLOSEOUT complete. Awaiting External ChatGPT final M5 review.**
+**M6 REVIEWER SUPER BATCH implementation complete. Awaiting External ChatGPT M6 review.**
 
-M6 NOT AUTHORIZED.
+M7 NOT AUTHORIZED.
 
 ## real_external_provider
 
-**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**。未索取、打印或保存 Key；localhost HTTP 生产链路已通过，非阻塞。
+**REAL_EXTERNAL_PROVIDER = UNVERIFIED_MISSING_CONFIG**。未索取、打印或保存 Key；localhost HTTP 生产链路用于工程验收，真实外部 Provider 缺配置不阻塞交付。
 
 ## last_round
 
-- Chief 输出严格 `WritingTaskCard`，支持一次 JSON repair 与安全 fallback；Writer AgentDef 无工具且只输出正文。
-- Relevant Entity Resolver 合并 TaskCard、文本自动识别与 CLI override，并拒绝 missing/ambiguous identity。
-- Dynamic ContextBudget 提供优先级、裁剪/丢弃 manifest、确定性 context hash 与一次 context-too-long shrink。
-- Writer 使用真实 `stream_chat`；正文逐 chunk flush 到非 canonical partial，支持中断、跨进程 resume、continue 与 rewrite。
-- `AIChapterDraftService` 使用 raw-byte revision guard、Snapshot/history、atomic write、post-write verify 与 rollback；只写 `origin=ai, status=draft`。
-- 新增 `write`、`context plan`、`draft`/`draft partial` CLI；context plan 完全离线。
-- AI draft confirm guard、frontmatter provenance、chapter list 与 Knowledge Doctor 检查已接入。
-- Final hardening counts rendered context wrappers strictly, keeps newest recent chapters first, refuses partial overwrite, and budgets continuation tails.
-- Per-chapter cross-process locks close application-level confirm/finalize/partial-prepare races; stale external bytes still win.
-- Stream protocol tool calls are hard failures even after text; public TaskCard output excludes opaque Chief brief.
-- Chief Planner now has a strict, prioritized context plan using the Chief model window and one independent 0.65 overflow retry.
-- AI confirm branches by origin: manual draft/user_confirmed, AI ready only, with confirmed origin preserved; no READY transition exists in M5.
-- Partial sidecar stores a redacted resume card and original task hash, never instruction/Chief brief/full context.
-- `--no-stream` performs a true non-stream Provider `chat()` call; offline context planning shares workflow relevance evidence.
+- Reviewer 无工具、只读分析；通过 `BaseProvider.chat()` 返回严格 ReviewReport。
+- ReviewReport 提供固定 enum、大小上限、行号归一化、去重、canonical hash 与一次 schema-only repair；无法证明 PASS 时 fail-closed。
+- Review Context 复用共享 ContextBudget，按实际 messages 计数；draft 最高优先、不注入全书，超大/重试截断阻止 READY。
+- relevance 从 draft、章纲、卷纲、instruction 与显式 override 推断，不伪造 M5 TaskCard。
+- Preflight 合并 Doctor、draft integrity、generation/status、confirmed conflict、空正文与 source ambiguity；模型不能删除 deterministic blocker。
+- 采用方案 B：canonical draft 在网络调用期间保持 `status=draft`；REVIEWING 仅进程内，无 pending sidecar，recover 返回 `NO_PENDING_REVIEW`。
+- ReviewService 以短 chapter lock、draft/report revision CAS、Snapshot/history、atomic write、post-write verify 与 guarded rollback 持久化报告和状态。
+- PASS 才能 `draft → ready`；NEEDS_WORK 保持 draft；Reviewer 永不改正文、调用 Writer 或自动 confirm。
+- AI ready 的 confirm 与 Doctor 都要求 schema/hash 合法且匹配当前 draft revision 的 PASS artifact。
+- 新增 review CLI、Doctor、localhost HTTP E2E 与 privacy/static regression。
 
 ## verified
 
-- `python -m pytest tests/ -v`: **530 passed, 5 skipped, 0 failed**; collected = 535。
-- M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
-- Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
-- Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。
+- M6 target、CLI、transaction、Doctor、localhost HTTP E2E 与旧里程碑 regression 已运行；最终全量精确测试数由交付主线程在 checkpoint 前回填。
 - Real external: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
 
 ## architecture
 
-- `agents/task_card.py`, `agents/planner.py`, `agents/writer.py`: Chief-to-Writer contract and prose runner。
-- `core/relevance.py`, `core/context_budget.py`: deterministic source selection and bounded Writer input。
-- `agents/planner.py`: independently bounded Chief planning context, overflow retry, then separate JSON repair。
-- `core/generation.py`: safe non-canonical partial workspace and exact-overlap merge。
-- `core/ai_draft.py`: canonical AI draft transaction boundary。
-- `core/write_workflow.py`: target validation → plan → context → stream → finalize orchestration。
-- `core/locks.py`: cross-process per-chapter critical-section lock for application mutations。
-- `adapters/cli/m5.py`: display/callback-only M5 CLI adapter。
+- `agents/review_report.py`, `agents/reviewer.py`, `agents/prompts/reviewer_system.md`: strict report contract and provider-independent Reviewer。
+- `core/review_context.py`, `core/review_preflight.py`: bounded context and deterministic fail-closed checks。
+- `core/review.py`: revision-bound report/status transaction, reopen/inspect, Architecture-B no-pending recover contract。
+- `core/review_workflow.py`: preflight → context → review/repair → merge → finalize；网络调用不持锁。
+- `adapters/cli/m6.py`: display/routing-only M6 CLI adapter。
+- `review/chNNNN.review.json`: current review artifact；不保存 prompt/full context/API key。
 
 ## stable_decisions
 
-- Writer writes prose only; workflow owns canonical persistence。
-- AI drafts cannot confirm before READY; M5 never runs Reviewer transitions。
-- AI ready confirm is a state-machine contract only; M5 exposes no command or workflow that produces READY。
-- Full novel is never automatically injected; ContextBudget is mandatory。
-- Interrupted generation uses partial workspace; partial is never canonical or history-bearing。
-- Rewrite/continue/resume use revision guard + Snapshot; external draft edits win stale races。
-- MutationService remains knowledge-only; AI DraftService remains chapter-draft-only。
+- Reviewer read/analyze only；ReviewService 独占 review/status persistence；正文 body 不变。
+- PASS 必须没有 BLOCKER/MAJOR；任何不确定性 fail-closed。
+- Report 绑定精确 draft revision；draft/report 外部修改使旧结果 stale，外部字节获胜。
+- READY 必须有 current matching PASS；PASS 不 confirm，用户仍需显式 `chapter confirm`。
+- Reviewer context 严格 bounded，不自动注入全书。
+- 方案 B 不持久化 reviewing/pending；recover 明确 `NO_PENDING_REVIEW`。
+- NEEDS_WORK 后只能由用户显式 `write --rewrite`；M7 才拥有自动 Writer↔Reviewer loop。
 
 ## known_issues
 
 - GitHub 仓库可见性此前实测为 public；未擅自变更。
 - Linux headless 无凭据服务时 SecretStore 明确报 BACKEND_UNAVAILABLE，不降级明文。
+- 真实外部 Reviewer 模型质量未验证；Reviewer 是辅助工具，PASS 不代表文学质量客观满分。
 
 ## next
 
-- P0: External ChatGPT final M5 Review。
-- P1: M6 Reviewer SUPER BATCH；**NOT AUTHORIZED**。
+- P0: External ChatGPT M6 Review。
+- P1: M7 Writer↔Reviewer orchestration；**NOT AUTHORIZED**。
