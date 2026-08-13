@@ -461,6 +461,10 @@ def _main(argv: list[str] | None = None) -> int:
         import adapters.cli.m6 as m6
         return m6.cmd_review(args)
 
+    if args.command == "compose":
+        import adapters.cli.m7 as m7
+        return m7.cmd_compose(args)
+
     print(f"未知命令: {args.command}")
     return 1
 
