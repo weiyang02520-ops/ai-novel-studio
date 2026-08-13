@@ -1,4 +1,6 @@
 from adapters.cli.main import build_parser
+from adapters.cli.m6 import _parse_shape
+import pytest
 
 
 def test_review_cli_accepts_run_and_inspection_shapes():
@@ -33,3 +35,15 @@ def test_review_cli_accepts_plan_filters_recover_and_reopen():
     assert issues.category == "CHARACTER"
     assert parser.parse_args(["review", "recover", "novel", "2"]).review_args[0] == "recover"
     assert parser.parse_args(["review", "reopen", "novel", "2"]).review_args[0] == "reopen"
+
+
+def test_review_shape_parser_is_strict_and_supports_default_chapter():
+    assert _parse_shape(["novel"]) == ("run", "novel", None)
+    assert _parse_shape(["novel", "2"]) == ("run", "novel", 2)
+    assert _parse_shape(["show", "novel", "2"]) == ("show", "novel", 2)
+    with pytest.raises(ValueError):
+        _parse_shape([])
+    with pytest.raises(ValueError):
+        _parse_shape(["show", "novel"])
+    with pytest.raises(ValueError):
+        _parse_shape(["novel", "zero"])
