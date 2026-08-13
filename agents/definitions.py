@@ -49,3 +49,9 @@ def writer_agent_def() -> AgentDef:
     """M5 Writer has no tools; workflow owns every persistent draft mutation."""
     return AgentDef(id="writer", name="写作分身", system_prompt=_load_prompt("writer_system.md"),
                     tools=[], max_tool_rounds=0, model_role="writer")
+
+
+def reviewer_agent_def() -> AgentDef:
+    """M6 Reviewer is read/analyze-only; workflow owns every mutation."""
+    return AgentDef(id="reviewer", name="审稿", system_prompt=_load_prompt("reviewer_system.md"),
+                    tools=[], max_tool_rounds=0, model_role="reviewer")
