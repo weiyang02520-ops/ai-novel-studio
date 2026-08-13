@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from .project import Project
 from .storage import DataIntegrityError, StorageError, atomic_write_text
+from .locks import history_lock
 
 INDEX_NAME = "index.jsonl"
 
@@ -115,7 +116,7 @@ class Snapshot:
 
     def __init__(self, project: Project, seq: int, operation: str,
                  changes: list[dict[str, Any]], backup_files: list[Path],
-                 metadata: Optional[dict[str, Any]] = None):
+                 metadata: Optional[dict[str, Any]] = None, lock_context=None):
         self.project = project
         self.seq = seq
         self.operation = operation
@@ -123,6 +124,12 @@ class Snapshot:
         self.backup_files = backup_files
         self._timestamp = _now_iso()
         self.metadata = dict(metadata) if metadata is not None else None
+        self._lock_context = lock_context
+
+    def _release_lock(self) -> None:
+        context, self._lock_context = self._lock_context, None
+        if context is not None:
+            context.__exit__(None, None, None)
 
     def set_metadata(self, metadata: dict[str, Any]) -> None:
         if not isinstance(metadata, dict):
@@ -148,7 +155,9 @@ class Snapshot:
         idx = hdir / INDEX_NAME
         current = idx.read_text(encoding="utf-8") if idx.exists() else ""
         atomic_write_text(idx, current + json.dumps(self.record(), ensure_ascii=False) + "\n")
-        return self.record()
+        result = self.record()
+        self._release_lock()
+        return result
 
     def discard(self) -> None:
         """放弃本次 operation: 清理备份文件(不写 index)。清理失败不掩盖主错误。"""
@@ -158,8 +167,9 @@ class Snapshot:
                     b.unlink()
             except OSError:
                 pass
+        self._release_lock()
 
-    def restore(self) -> None:
+    def restore(self, expected_current: Optional[dict[str, Optional[bytes]]] = None) -> None:
         """把业务文件恢复到快照时状态。
 
         尽力恢复全部 target(单个失败不中断后续恢复); 任一失败 → StorageError。
@@ -169,6 +179,12 @@ class Snapshot:
         for ch in self.changes:
             try:
                 target = self.project.store.safe_path(self.project.id, ch["target"])
+                if expected_current is not None and ch["target"] in expected_current:
+                    expected = expected_current[ch["target"]]
+                    actual = target.read_bytes() if target.is_file() else None
+                    if actual != expected:
+                        failures.append(f"{ch['target']}: concurrent external change preserved")
+                        continue
                 if ch["previous"] == "present":
                     bpath = self.project.store.safe_path(self.project.id, ch["backup"])
                     content = bpath.read_text(encoding="utf-8")
@@ -179,6 +195,9 @@ class Snapshot:
             except Exception as e:
                 failures.append(f"{ch['target']}: {e}")
         if failures:
+            # Keep backups for manual recovery, but never strand the global
+            # history transaction lock after an incomplete guarded restore.
+            self._release_lock()
             raise StorageError("恢复未完整完成: " + "; ".join(failures))
 
 
@@ -189,13 +208,14 @@ def prepare_snapshot(project: Project, operation: str, target_rels: list[str],
     复制中途失败 → 已创建的 backups 全部清理, 原文件不变, index 无记录。
     seq 在 prepare 时分配; 失败后不产生孤儿 seq(index 未写)。
     """
-    hdir = _history_dir(project)
-    hdir.mkdir(parents=True, exist_ok=True)
-    seq = _next_seq(project)
-
+    lock_context = history_lock(project)
+    lock_context.__enter__()
     changes: list[dict[str, Any]] = []
     backup_files: list[Path] = []
     try:
+        hdir = _history_dir(project)
+        hdir.mkdir(parents=True, exist_ok=True)
+        seq = _next_seq(project)
         for target_rel in target_rels:
             target = project.store.safe_path(project.id, target_rel)
             ch: dict[str, Any] = {"target": target_rel}
@@ -220,8 +240,9 @@ def prepare_snapshot(project: Project, operation: str, target_rels: list[str],
                     b.unlink()
             except OSError:
                 pass
+        lock_context.__exit__(None, None, None)
         raise
-    return Snapshot(project, seq, operation, changes, backup_files, metadata)
+    return Snapshot(project, seq, operation, changes, backup_files, metadata, lock_context)
 
 
 def snapshot(project: Project, operation: str, target_rel: str) -> dict[str, Any]:
@@ -349,7 +370,7 @@ def _remove_record(project: Project, rec: dict[str, Any]) -> None:
     atomic_write_text(idx, "\n".join(remaining) + ("\n" if remaining else ""))
 
 
-def undo_last(project: Project) -> dict[str, Any]:
+def _undo_last_locked(project: Project) -> dict[str, Any]:
     """回滚最近一次快照 — 真正 all-or-nothing。
 
     1. preflight: 一次性验证整个 changes(任何问题 → 失败, 0 修改)
@@ -393,3 +414,9 @@ def undo_last(project: Project) -> dict[str, Any]:
             break
     _remove_record(project, rec)
     return rec
+
+
+def undo_last(project: Project) -> dict[str, Any]:
+    """Serialize undo against every prepared/committing history transaction."""
+    with history_lock(project):
+        return _undo_last_locked(project)

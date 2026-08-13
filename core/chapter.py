@@ -349,6 +349,9 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
     text = _read_any(path, "无法读取草稿")
     meta, body = parse_frontmatter(text)
     _check_chapter_number_consistency(meta, path)
+    from .mutation import file_revision
+    validated_draft_revision = file_revision(path)
+    validated_report_revision = None
 
     status = meta["status"]
     if status == "confirmed":
@@ -363,10 +366,10 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
             raise DataIntegrityError(f"{path.name}: AI 章节必须先经 ready 才能确认")
         # READY is valid only while a strict PASS artifact matches these exact
         # canonical draft bytes; an externally toggled status must not confirm.
-        from .mutation import file_revision
-        from .review import ReviewError, require_current_pass_report
+        from .review import ReviewError, report_path, require_current_pass_report
         try:
-            require_current_pass_report(project, number, file_revision(path))
+            require_current_pass_report(project, number, validated_draft_revision)
+            validated_report_revision = file_revision(report_path(project, number))
         except ReviewError as exc:
             raise DataIntegrityError(
                 f"{path.name}: AI ready draft 缺少当前有效的 PASS review: {exc}") from exc
@@ -384,6 +387,17 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
 
     from .history import prepare_snapshot
     prepared = prepare_snapshot(project, "chapter.confirm", [draft_rel, "project.json", confirmed_rel])
+
+    # Snapshot preparation is I/O and therefore another CAS boundary. Never
+    # confirm/delete bytes other than those validated above.
+    if file_revision(path) != validated_draft_revision:
+        prepared.discard()
+        raise DataIntegrityError(f"{path.name}: confirm snapshot 期间 draft 已变化")
+    if origin == "ai":
+        from .review import report_path
+        if file_revision(report_path(project, number)) != validated_report_revision:
+            prepared.discard()
+            raise DataIntegrityError(f"{path.name}: confirm snapshot 期间 review 已变化")
 
     # 2) 准备 confirmed 内容
     now = _now_iso()

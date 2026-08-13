@@ -9,8 +9,8 @@ from .storage import StorageError
 
 
 @contextlib.contextmanager
-def chapter_lock(project, chapter: int, *, timeout: float = 10.0):
-    path = project.store.safe_path(project.id, f".locks/ch{chapter:04d}.lock")
+def _file_lock(project, rel: str, *, timeout: float = 10.0):
+    path = project.store.safe_path(project.id, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+b")
     handle.seek(0)
@@ -47,3 +47,12 @@ def chapter_lock(project, chapter: int, *, timeout: float = 10.0):
             except OSError:
                 pass
         handle.close()
+
+
+def chapter_lock(project, chapter: int, *, timeout: float = 10.0):
+    return _file_lock(project, f".locks/ch{chapter:04d}.lock", timeout=timeout)
+
+
+def history_lock(project, *, timeout: float = 30.0):
+    """Serialize history seq allocation, backups and index replacement."""
+    return _file_lock(project, ".locks/history.lock", timeout=timeout)

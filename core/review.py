@@ -25,7 +25,7 @@ from .storage import atomic_write_text
 
 REPORT_LIMIT_BYTES = 500_000
 _active_guard = threading.Lock()
-_active: dict[tuple[str, int], str] = {}
+_active: set[tuple[str, int, str]] = set()
 
 
 class ReviewError(Exception):
@@ -137,6 +137,11 @@ def load_review_artifact(project: Project, chapter: int) -> dict[str, Any]:
         raise ReviewError("MALFORMED_REVIEW_REPORT", "report payload invalid")
     if data["report_hash"] != _report_payload_hash(data):
         raise ReviewError("MALFORMED_REVIEW_REPORT", "report issues/hash invalid")
+    try:
+        from agents.review_report import parse_review_report
+        parse_review_report(_canonical({key: data[key] for key in _REPORT_FIELDS}))
+    except Exception as exc:
+        raise ReviewError("MALFORMED_REVIEW_REPORT", "report schema invalid") from exc
     return data
 
 
@@ -187,21 +192,17 @@ class ReviewService:
             run = ReviewRun(uuid.uuid4().hex, chapter, file_revision(path), file_revision(rp),
                             reviewer_model, context_hash, _now())
             with _active_guard:
-                key = self._key(chapter)
-                if key in _active:
-                    raise ReviewError("REVIEW_ALREADY_RUNNING", "a review is already active")
-                _active[key] = run.token
+                _active.add((*self._key(chapter), run.token))
             return run
 
     def abort(self, run: ReviewRun) -> None:
         with _active_guard:
-            if _active.get(self._key(run.chapter)) == run.token:
-                _active.pop(self._key(run.chapter), None)
+            _active.discard((*self._key(run.chapter), run.token))
 
     def finalize(self, run: ReviewRun, report: Any) -> ReviewResult:
         try:
             with _active_guard:
-                if _active.get(self._key(run.chapter)) != run.token:
+                if (*self._key(run.chapter), run.token) not in _active:
                     raise ReviewError("REVIEW_RUN_INACTIVE", "review run is not active")
             with chapter_lock(self.project, run.chapter):
                 return self._finalize_locked(run, report)
@@ -209,6 +210,7 @@ class ReviewService:
             self.abort(run)
 
     def _finalize_locked(self, run: ReviewRun, report: Any) -> ReviewResult:
+        from agents.review_report import ReviewReport, ReviewReportError, parse_review_report
         path, rp = draft_path(self.project, run.chapter), report_path(self.project, run.chapter)
         _reject_symlink(rp, self.project.dir)
         if file_revision(path) != run.draft_revision:
@@ -219,8 +221,18 @@ class ReviewService:
         meta, body = parse_frontmatter(old.decode("utf-8"))
         if meta.get("origin") != "ai" or meta.get("status") != "draft":
             raise ReviewError("STALE_REVIEW_DRAFT", "draft state changed during review")
-        data = _plain(report)
-        if not isinstance(data, dict) or data.get("chapter") != run.chapter:
+        try:
+            if isinstance(report, ReviewReport):
+                strict_report = report
+            else:
+                strict_report = parse_review_report(
+                    json.dumps(_plain(report), ensure_ascii=False, allow_nan=False),
+                    draft_line_count=len(body.splitlines()),
+                ).report
+        except (ReviewReportError, TypeError, ValueError) as exc:
+            raise ReviewError("INVALID_REVIEW_REPORT", "report failed strict validation") from exc
+        data = strict_report.to_dict()
+        if data.get("chapter") != run.chapter:
             raise ReviewError("INVALID_REVIEW_REPORT", "report chapter mismatch")
         verdict = data.get("verdict")
         if verdict not in {"PASS", "NEEDS_WORK"}:
@@ -260,9 +272,12 @@ class ReviewService:
             code = "STALE_REVIEW_DRAFT" if file_revision(path) != run.draft_revision else "STALE_REVIEW_REPORT"
             raise ReviewError(code, "target changed while preparing snapshot")
         old_report = rp.read_bytes() if rp.is_file() else None
+        expected_current = {f"drafts/{path.name}": old, rel: old_report}
         try:
             self.writer(path, rendered)
+            expected_current[f"drafts/{path.name}"] = rendered.encode("utf-8")
             self.writer(rp, report_text)
+            expected_current[rel] = report_text.encode("utf-8")
             if path.read_bytes() != rendered.encode("utf-8") or rp.read_bytes() != report_text.encode("utf-8"):
                 raise ReviewError("REVIEW_VERIFY_FAILED", "post-write verification failed")
             if parse_frontmatter(path.read_text(encoding="utf-8"))[1] != body:
@@ -271,7 +286,7 @@ class ReviewService:
             snap.commit()
         except Exception as exc:
             try:
-                snap.restore()
+                snap.restore(expected_current=expected_current)
                 if path.read_bytes() != old or ((rp.read_bytes() if rp.is_file() else None) != old_report):
                     raise RuntimeError("rollback verification failed")
                 snap.discard()
@@ -310,7 +325,7 @@ class ReviewService:
                 snap.commit()
             except Exception as exc:
                 try:
-                    snap.restore()
+                    snap.restore(expected_current={f"drafts/{path.name}": rendered.encode("utf-8")})
                     if path.read_bytes() != raw:
                         raise RuntimeError("reopen rollback verification failed")
                     snap.discard()

@@ -35,7 +35,12 @@ class FakeReport:
     def to_dict(self):
         return {
             "chapter": self.chapter, "verdict": self.verdict, "summary": "ok",
-            "issues": list(self.issues), "strengths": ["clear"],
+            "issues": [{"id": f"i{n}", "category": x.get("category", "OTHER"),
+                        "severity": x.get("severity", "INFO"), "title": x.get("title", "issue"),
+                        "description": x.get("description", "detail"),
+                        "location": {"line_start": None, "line_end": None, "anchor": None},
+                        "evidence": x.get("evidence", ""), "suggestion": x.get("suggestion", "fix")}
+                       for n, x in enumerate(self.issues)], "strengths": ["clear"],
             "task_fulfillment": "ok", "continuity_assessment": "ok",
             "style_assessment": "ok", "logic_assessment": "ok",
             "confidence": 0.9, "source": "reviewer",
@@ -175,3 +180,36 @@ def test_valid_current_pass_can_confirm_and_advances_only_at_confirm(project):
     confirmed = confirm_draft(project, 1)
     assert confirmed.status == "confirmed" and confirmed.origin == "ai"
     assert project.current_chapter == 1
+
+
+def test_rollback_never_overwrites_external_bytes_written_mid_transaction(project):
+    from core.review import ReviewError, ReviewService
+    ai_draft(project); path = draft_path(project, 1)
+    original = path.read_bytes(); external = b'external report wins'
+    calls = 0
+
+    def race_writer(target, text):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(external)
+            raise OSError("external report race")
+        atomic_write_text(target, text)
+
+    svc = ReviewService(project, writer=race_writer)
+    run = svc.begin(chapter=1, reviewer_model="r", context_hash="h")
+    with pytest.raises(ReviewError, match="REVIEW_ROLLBACK_FAILED"):
+        svc.finalize(run, FakeReport())
+    assert path.read_bytes() == original
+    assert (project.dir / "review/ch0001.review.json").read_bytes() == external
+
+
+def test_concurrent_begins_are_safe_first_finalize_wins(project):
+    from core.review import ReviewError
+    ai_draft(project); svc = service()(project)
+    first = svc.begin(chapter=1, reviewer_model="r1", context_hash="h1")
+    second = svc.begin(chapter=1, reviewer_model="r2", context_hash="h2")
+    svc.finalize(first, FakeReport(verdict="NEEDS_WORK"))
+    with pytest.raises(ReviewError, match="STALE_REVIEW_REPORT"):
+        svc.finalize(second, FakeReport(verdict="NEEDS_WORK"))
