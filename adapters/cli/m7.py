@@ -7,13 +7,19 @@ import time
 from pathlib import Path
 
 from agents.definitions import reviewer_agent_def, writer_agent_def
+from agents.review_report import ReviewReportError
 from core import project as project_core
+from core.ai_draft import AIDraftError
 from core.compose_state import ComposeRunStore, ComposeStateError, compose_status
 from core.config import ConfigError, Settings
+from core.context_budget import ContextBudgetError
 from core.creation_workflow import CreationRequest, CreationWorkflow, CreationWorkflowError
-from core.review_workflow import ReviewWorkflow
+from core.relevance import RelevanceError
+from core.review import ReviewError
+from core.review_workflow import ReviewWorkflow, ReviewWorkflowError
+from core.revision_feedback import RevisionFeedbackError
 from core.storage import DataIntegrityError, ProjectStore, StorageError
-from core.write_workflow import WriteWorkflow
+from core.write_workflow import WriteWorkflow, WriteWorkflowError
 from llm.factory import create_provider
 from llm.provider import ProviderError
 from llm.secret_store import default_secret_store
@@ -159,7 +165,9 @@ def cmd_compose(args) -> int:
                        duration_ms=duration_ms)
         return _print_result(result, show_rounds=args.show_rounds, project_id=project.id)
     except (StorageError, DataIntegrityError, ConfigError, ComposeStateError,
-            CreationWorkflowError, ProviderError, OSError, ValueError) as exc:
+            CreationWorkflowError, WriteWorkflowError, ReviewWorkflowError, ReviewError,
+            ReviewReportError, RevisionFeedbackError, AIDraftError, ContextBudgetError,
+            RelevanceError, ProviderError, OSError, ValueError) as exc:
         print(f"错误: {getattr(exc, 'message', str(exc))}", file=sys.stderr)
         return 1
     finally:
