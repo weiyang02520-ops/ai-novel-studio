@@ -10,7 +10,7 @@ from core.ai_draft import AIChapterDraftService
 from core.chapter import draft_path, parse_frontmatter
 from core.history import list_history
 from core.mutation import ABSENT
-from core.project import create_project
+from core.project import create_project, open_project
 from core.storage import ProjectStore, atomic_write_text
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,25 +91,32 @@ def _review(project, data_dir, config):
 
 def test_http_pass_then_explicit_confirm(server, tmp_path):
     project, data, config = _setup(server, tmp_path)
+    _, before_body = parse_frontmatter(draft_path(project, 1).read_text(encoding="utf-8"))
     server.responses.append((200, _http_result(json.dumps(_report(), ensure_ascii=False))))
     reviewed = _review(project, data, config)
     assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
     meta, body = parse_frontmatter(draft_path(project, 1).read_text(encoding="utf-8"))
-    assert meta["status"] == "ready" and "契纹" in body
+    assert meta["status"] == "ready" and body == before_body
     assert (project.dir / "review/ch0001.review.json").is_file()
+    payload = server.requests[0]["body_json"]
+    assert payload["model"] == "review-role"
+    assert payload.get("stream") is not True and "tools" not in payload
     confirmed = _run(project, data, config, "chapter", "confirm", project.id, "1")
     assert confirmed.returncode == 0, confirmed.stdout + confirmed.stderr
     assert (project.dir / "chapters/ch0001.md").is_file()
+    assert not draft_path(project, 1).exists()
+    assert open_project(project.store, project.id).current_chapter == 1
     assert [x["operation"] for x in list_history(project)][:2] == ["chapter.confirm", "ai.review.pass"]
 
 
 def test_http_needs_work_stays_draft(server, tmp_path):
     project, data, config = _setup(server, tmp_path)
+    before = draft_path(project, 1).read_bytes()
     server.responses.append((200, _http_result(json.dumps(
         _report("NEEDS_WORK", severity="MAJOR"), ensure_ascii=False))))
     result = _review(project, data, config)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert parse_frontmatter(draft_path(project, 1).read_text(encoding="utf-8"))[0]["status"] == "draft"
+    assert draft_path(project, 1).read_bytes() == before
     assert json.loads((project.dir / "review/ch0001.review.json").read_text(encoding="utf-8"))["verdict"] == "NEEDS_WORK"
 
 
@@ -153,6 +160,7 @@ def test_http_context_too_long_retries_with_smaller_request(server, tmp_path):
 def test_http_external_edit_before_response_is_stale_and_preserved(server, tmp_path):
     project, data, config = _setup(server, tmp_path)
     path = draft_path(project, 1)
+    before = path.read_bytes()
     external = b"external-response-race"
     def race(_request, count):
         if count == 1:
@@ -161,5 +169,5 @@ def test_http_external_edit_before_response_is_stale_and_preserved(server, tmp_p
     server.responses.append((200, _http_result(json.dumps(_report(), ensure_ascii=False))))
     result = _review(project, data, config)
     assert result.returncode != 0
-    assert path.read_bytes().endswith(external)
+    assert path.read_bytes() == before + external
     assert not (project.dir / "review/ch0001.review.json").exists()
