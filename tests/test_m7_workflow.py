@@ -68,9 +68,13 @@ class FakeWrite:
 
 
 class FakeReview:
-    def __init__(self, p, reports, blockers=None):
+    def __init__(self, p, reports, blockers=None, existing_blockers=()):
         self.p, self.reports, self.requests = p, list(reports), []
         self.blockers = list(blockers or [()] * len(reports))
+        self.existing_blockers = tuple(existing_blockers)
+
+    def preflight_existing(self, _request):
+        return preflight(*self.existing_blockers)
 
     def run(self, req, **_):
         self.requests.append(req)
@@ -141,6 +145,22 @@ def test_existing_draft_is_reviewed_without_duplicate_initial_write(tmp_path):
     flow, writer, reviewer = workflow(p, [], [report()])
     assert flow.run(CreationRequest(p, 1)).final_state == "READY"
     assert not writer.requests and len(reviewer.requests) == 1
+
+
+def test_current_needs_work_reruns_deterministic_preflight_before_rewrite(tmp_path):
+    p = project(tmp_path); save_draft(p, "A")
+    service = ReviewService(p); run = service.begin(chapter=1, reviewer_model="r", context_hash="x" * 64)
+    service.finalize(run, report("NEEDS_WORK", [issue()]))
+    writer = FakeWrite(p, ["B"])
+    reviewer = FakeReview(p, [], existing_blockers=("DUPLICATE_CHARACTER_H1",))
+    flow = CreationWorkflow(write_workflow_factory=lambda _p: writer,
+                            review_workflow_factory=lambda _p: reviewer)
+
+    result = flow.run(CreationRequest(p, 1))
+
+    assert result.final_state == "ESCALATED"
+    assert result.reason == "NON_REWRITEABLE_BLOCKER"
+    assert not writer.requests and not reviewer.requests
 
 
 def test_current_needs_work_is_rewritten_then_keeps_full_reviewer_budget(tmp_path):

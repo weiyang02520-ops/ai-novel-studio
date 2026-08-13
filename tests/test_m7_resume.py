@@ -285,7 +285,7 @@ def test_resume_interrupted_initial_writer_finishes_review_and_cleans_run(tmp_pa
     reviewer.reports.append(report())
     reviewer.blockers.append(())
 
-    result = flow.run(CreationRequest(project, instruction="same", resume=True))
+    result = flow.run(CreationRequest(project, resume=True))
 
     assert result.final_state == "READY"
     assert [request.mode for request in writer.requests] == ["new", "resume"]
@@ -345,7 +345,8 @@ def test_resume_waiting_review_phases_do_not_repeat_writer(tmp_path, phase):
     now = "2026-08-13T00:00:00Z"
     ComposeRunStore(project, 1).save(_run(
         phase=phase, draft_revision=file_revision(path), writer_mode="rewrite" if
-        phase == "WAITING_REREVIEW" else "new", review_round=0,
+        phase == "WAITING_REREVIEW" else "new",
+        review_round=1 if phase == "WAITING_REREVIEW" else 0,
         models={"chief": "", "writer": "", "reviewer": ""},
         initial_instruction_hash=hashlib.sha256(b"same").hexdigest(),
         started_at=now, updated_at=now,
@@ -355,6 +356,7 @@ def test_resume_waiting_review_phases_do_not_repeat_writer(tmp_path, phase):
 
     assert result.final_state == "READY"
     assert not writer.requests and len(reviewer.requests) == 1
+    assert result.rounds_completed == 1 + (1 if phase == "WAITING_REREVIEW" else 0)
 
 
 @pytest.mark.parametrize(
@@ -375,7 +377,25 @@ def test_resume_configuration_mismatch_blocks_without_touching_partial(
     assert result.final_state == "BLOCKED" and result.reason == reason
     assert GenerationWorkspace(project, 1).text() == before
     assert len(writer.requests) == 1
-    assert ComposeRunStore(project, 1).require().phase == "BLOCKED"
+    assert ComposeRunStore(project, 1).require().phase == "WRITER_INTERRUPTED"
+
+
+def test_resume_after_mismatched_instruction_can_retry_with_empty_instruction(tmp_path):
+    project = _project(tmp_path)
+    flow, writer, reviewer = _flows(project, [], [], interrupted_at=1)
+    flow.run(CreationRequest(project, instruction="private original"))
+    _prepare_partial(project, mode="new", base_revision="ABSENT")
+
+    mismatch = flow.run(CreationRequest(project, instruction="wrong", resume=True))
+    assert mismatch.reason == "COMPOSE_INSTRUCTION_MISMATCH"
+    assert ComposeRunStore(project, 1).require().phase == "WRITER_INTERRUPTED"
+
+    writer.interrupted_at = None
+    writer.bodies.append("finished")
+    reviewer.reports.append(report())
+    reviewer.blockers.append(())
+    resumed = flow.run(CreationRequest(project, resume=True))
+    assert resumed.final_state == "READY"
 
 
 def test_resume_rejects_partial_base_revision_mismatch(tmp_path):
@@ -474,3 +494,85 @@ def test_escalated_run_is_retained_but_ready_run_is_deleted(tmp_path):
     flow, _, _ = _flows(project, ["A"], [report()])
     assert flow.run(CreationRequest(project)).final_state == "READY"
     assert not ComposeRunStore(project, 1).exists()
+
+
+def test_escalated_run_can_resume_after_project_fix(tmp_path):
+    project = _project(tmp_path)
+    path = _ai_draft(project, body="A")
+    service = ReviewService(project)
+    run = service.begin(chapter=1, reviewer_model="reviewer", context_hash="x" * 64)
+    persisted = service.finalize(run, report("NEEDS_WORK", [issue()]))
+    ComposeRunStore(project, 1).save(_run(
+        phase="ESCALATED", draft_revision=file_revision(path), review_round=1,
+        latest_report_hash=persisted.report_hash, latest_verdict="NEEDS_WORK",
+        issue_fingerprints=(), writer_mode="rewrite",
+        models={"chief": "", "writer": "", "reviewer": ""},
+        initial_instruction_hash=hashlib.sha256(b"private").hexdigest(),
+    ))
+    flow, writer, reviewer = _flows(project, [], [report()])
+
+    result = flow.run(CreationRequest(project, resume=True))
+
+    assert result.final_state == "READY"
+    assert not writer.requests and len(reviewer.requests) == 1
+
+
+def test_resume_reconciles_canonical_draft_committed_before_initial_phase_save(tmp_path):
+    project = _project(tmp_path)
+    path = _ai_draft(project, body="committed")
+    ComposeRunStore(project, 1).save(_run(
+        phase="INITIAL_WRITE", draft_revision="ABSENT", review_round=0,
+        writer_mode="new", models={"chief": "", "writer": "", "reviewer": ""},
+        initial_instruction_hash=hashlib.sha256(b"private").hexdigest(),
+    ))
+    flow, writer, reviewer = _flows(project, [], [report()])
+
+    result = flow.run(CreationRequest(project, resume=True))
+
+    assert result.final_state == "READY"
+    assert file_revision(path) == result.draft_revision
+    assert not writer.requests and len(reviewer.requests) == 1
+
+
+def test_resume_reconciles_rewrite_committed_before_interrupted_phase_save(tmp_path):
+    project = _project(tmp_path)
+    path = _ai_draft(project, body="A")
+    service = ReviewService(project)
+    run = service.begin(chapter=1, reviewer_model="reviewer", context_hash="x" * 64)
+    persisted = service.finalize(run, report("NEEDS_WORK", [issue()]))
+    old_revision = file_revision(path)
+    _ai_draft(project, body="B")
+    ComposeRunStore(project, 1).save(_run(
+        phase="WRITER_INTERRUPTED", draft_revision=old_revision, review_round=1,
+        latest_report_hash=persisted.report_hash, latest_verdict="NEEDS_WORK",
+        writer_mode="rewrite", models={"chief": "", "writer": "", "reviewer": ""},
+        initial_instruction_hash=hashlib.sha256(b"private").hexdigest(),
+    ))
+    flow, writer, reviewer = _flows(project, [], [report()])
+
+    result = flow.run(CreationRequest(project, resume=True))
+
+    assert result.final_state == "READY"
+    assert not writer.requests and len(reviewer.requests) == 1
+    assert result.rounds_completed == 2
+
+
+def test_resume_reconciles_needs_work_report_committed_before_round_state_save(tmp_path):
+    project = _project(tmp_path)
+    path = _ai_draft(project, body="A")
+    ComposeRunStore(project, 1).save(_run(
+        phase="WAITING_REVIEW", draft_revision=file_revision(path), review_round=0,
+        latest_report_hash="", latest_verdict="", writer_mode="new",
+        models={"chief": "", "writer": "", "reviewer": ""},
+        initial_instruction_hash=hashlib.sha256(b"private").hexdigest(),
+    ))
+    service = ReviewService(project)
+    run = service.begin(chapter=1, reviewer_model="reviewer", context_hash="x" * 64)
+    service.finalize(run, report("NEEDS_WORK", [issue()]))
+    flow, writer, reviewer = _flows(project, ["B"], [report()])
+
+    result = flow.run(CreationRequest(project, resume=True))
+
+    assert result.final_state == "READY"
+    assert len(writer.requests) == 1 and len(reviewer.requests) == 1
+    assert result.rounds_completed == 2
