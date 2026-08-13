@@ -12,4 +12,4 @@ This M5-to-M6 handoff is now fulfilled by the runnable M6 Reviewer workflow.
 
 Current status: M6 implementation complete; awaiting External ChatGPT M6 review.
 
-**M7 NOT AUTHORIZED.** No automatic Writer rewrite, review loop, confirmation, outline/knowledge mutation, or post-confirm memory workflow exists.
+This was the M6 handoff boundary. M7 has since been implemented and is awaiting external review; see `M7_READINESS.md`. M8 remains NOT AUTHORIZED. Automatic confirmation, outline/knowledge mutation, and post-confirm memory workflow still do not exist.
