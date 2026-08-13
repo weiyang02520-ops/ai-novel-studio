@@ -25,12 +25,6 @@ REWRITEABLE_CATEGORIES = frozenset({
     "LOGIC", "CAUSALITY", "SCENE", "POV", "STYLE", "DIALOGUE", "PACING",
     "REPETITION", "EXPOSITION", "AI_VOICE", "FORESHADOWING",
 })
-NON_REWRITEABLE_PREFLIGHT_CODES = frozenset({
-    "DRAFT_TRUNCATED_FOR_REVIEW", "DOCTOR_FAILED", "INVALID_UTF8",
-    "DUPLICATE_CHARACTER_H1", "DUPLICATE_WORLD_H1", "SYMLINK_ESCAPE",
-    "BROKEN_SYMLINK", "BROKEN_HISTORY", "PROJECT_INTEGRITY", "PROJECT_METADATA",
-    "REVIEW_CONTEXT_IMPOSSIBLE", "REVIEW_DRAFT_CONTEXT_EXHAUSTED",
-})
 
 _HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -159,6 +153,53 @@ def canonical_feedback_json(feedback: RevisionFeedback) -> str:
     return _canonical_dict(feedback)
 
 
+_FEEDBACK_FIELDS = {
+    "chapter", "review_report_hash", "draft_revision", "must_fix", "preserve",
+    "review_summary", "round_number",
+}
+_ITEM_FIELDS = {
+    "issue_id", "category", "severity", "title", "suggestion",
+    "line_start", "line_end", "anchor",
+}
+
+
+def _exact_object(value: Any, fields: set[str], name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise RevisionFeedbackError("INVALID_REVISION_FEEDBACK", f"invalid {name} fields")
+    return value
+
+
+def parse_revision_feedback(text: str) -> RevisionFeedback:
+    """Parse an exact, size-bounded feedback object; unknown fields fail closed."""
+    if not isinstance(text, str):
+        raise RevisionFeedbackError("INVALID_REVISION_FEEDBACK", "feedback must be JSON text")
+    if len(text) > MAX_FEEDBACK_CHARS:
+        raise RevisionFeedbackError("REVISION_FEEDBACK_TOO_LARGE")
+    try:
+        raw = json.loads(text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise RevisionFeedbackError("INVALID_REVISION_FEEDBACK", "invalid JSON") from exc
+    data = _exact_object(raw, _FEEDBACK_FIELDS, "feedback")
+    if not isinstance(data["must_fix"], list) or not isinstance(data["preserve"], list):
+        raise RevisionFeedbackError("INVALID_REVISION_FEEDBACK", "arrays required")
+    try:
+        items = tuple(RevisionItem(**_exact_object(item, _ITEM_FIELDS, "revision item"))
+                      for item in data["must_fix"])
+        feedback = RevisionFeedback(
+            data["chapter"], data["review_report_hash"], data["draft_revision"], items,
+            tuple(data["preserve"]), data["review_summary"], data["round_number"],
+        )
+    except RevisionFeedbackError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RevisionFeedbackError("INVALID_REVISION_FEEDBACK", "invalid value types") from exc
+    # The constructor bounds canonical form; this raw boundary separately prevents
+    # whitespace or alternate JSON encodings from bypassing the transport cap.
+    if len(canonical_feedback_json(feedback)) > MAX_FEEDBACK_CHARS:
+        raise RevisionFeedbackError("REVISION_FEEDBACK_TOO_LARGE")
+    return feedback
+
+
 def feedback_hash(feedback: RevisionFeedback) -> str:
     return hashlib.sha256(canonical_feedback_json(feedback).encode("utf-8")).hexdigest()
 
@@ -183,29 +224,87 @@ def _revision_item(issue: ReviewIssue) -> RevisionItem:
     )
 
 
+def _fit_feedback(*, chapter: int, report_hash_value: str, draft_revision: str,
+                  items: list[RevisionItem], preserve: tuple[str, ...], summary: str,
+                  round_number: int) -> RevisionFeedback | None:
+    try:
+        return RevisionFeedback(chapter, report_hash_value, draft_revision, tuple(items),
+                                preserve, summary, round_number)
+    except RevisionFeedbackError as exc:
+        if exc.code == "REVISION_FEEDBACK_TOO_LARGE":
+            return None
+        raise
+
+
+def _cap_items(items: list[RevisionItem], *, suggestion: int = MAX_SUGGESTION_CHARS,
+               anchor: int = MAX_ANCHOR_CHARS, title: int = MAX_TITLE_CHARS) -> list[RevisionItem]:
+    return [RevisionItem(
+        item.issue_id, item.category, item.severity,
+        _bounded(item.title, title), _bounded(item.suggestion, suggestion),
+        item.line_start, item.line_end,
+        _bounded(item.anchor, anchor) if item.anchor and anchor else None,
+    ) for item in items]
+
+
 def build_revision_feedback(report: ReviewReport, *, review_report_hash: str,
                             draft_revision: str, round_number: int) -> RevisionFeedback:
     if not isinstance(report, ReviewReport):
         raise RevisionFeedbackError("INVALID_REVIEW_REPORT")
-    items = sorted(
-        (_revision_item(issue) for issue in report.issues if issue.severity in REVISION_SEVERITIES),
-        key=_item_sort_key,
-    )[:MAX_REVISION_ISSUES]
+    critical = sorted((_revision_item(issue) for issue in report.issues
+                       if issue.severity in {"BLOCKER", "MAJOR"}), key=_item_sort_key)
+    if len(critical) > MAX_REVISION_ISSUES:
+        raise RevisionFeedbackError(
+            "REVISION_FEEDBACK_TOO_LARGE", "more than 20 BLOCKER/MAJOR issues cannot be hidden")
+    minor = sorted((_revision_item(issue) for issue in report.issues
+                    if issue.severity == "MINOR"), key=_item_sort_key)
+    items = critical + minor[:MAX_REVISION_ISSUES - len(critical)]
     preserve = tuple(_bounded(value, MAX_PRESERVE_CHARS) for value in report.strengths
                      if value.strip())[:MAX_PRESERVE_ITEMS]
     summary = _bounded(report.summary, MAX_SUMMARY_CHARS)
-    # Per-field caps make every item safe. Drop lowest-priority trailing items until
-    # the canonical whole-object cap also holds; ordering makes this deterministic.
-    while True:
-        try:
-            return RevisionFeedback(
-                report.chapter, review_report_hash, draft_revision, tuple(items), preserve,
-                summary, round_number,
-            )
-        except RevisionFeedbackError as exc:
-            if exc.code != "REVISION_FEEDBACK_TOO_LARGE" or not items:
-                raise
-            items.pop()
+    candidate = _fit_feedback(
+        chapter=report.chapter, report_hash_value=review_report_hash,
+        draft_revision=draft_revision, items=items, preserve=preserve,
+        summary=summary, round_number=round_number)
+    # MINOR findings are optional automation hints. Remove them before reducing any
+    # BLOCKER/MAJOR information, keeping the fixed severity order intact.
+    while candidate is None and items and items[-1].severity == "MINOR":
+        items.pop()
+        candidate = _fit_feedback(
+            chapter=report.chapter, report_hash_value=review_report_hash,
+            draft_revision=draft_revision, items=items, preserve=preserve,
+            summary=summary, round_number=round_number)
+    if candidate is not None:
+        return candidate
+
+    for preserve_cap, summary_cap in ((200, 1000), (50, 500), (0, 200), (0, 1)):
+        bounded_preserve = (tuple(_bounded(value, preserve_cap) for value in preserve)
+                            if preserve_cap else ())
+        bounded_summary = _bounded(summary, summary_cap)
+        candidate = _fit_feedback(
+            chapter=report.chapter, report_hash_value=review_report_hash,
+            draft_revision=draft_revision, items=items, preserve=bounded_preserve,
+            summary=bounded_summary, round_number=round_number)
+        if candidate is not None:
+            return candidate
+        preserve, summary = bounded_preserve, bounded_summary
+
+    caps = (
+        (800, 300, 300), (600, 300, 300), (400, 300, 300),
+        (400, 200, 200), (300, 100, 150), (200, 50, 100),
+        (100, 0, 50), (50, 0, 20), (1, 0, 1),
+    )
+    original_items = items
+    for suggestion_cap, anchor_cap, title_cap in caps:
+        compressed = _cap_items(original_items, suggestion=suggestion_cap,
+                                anchor=anchor_cap, title=title_cap)
+        candidate = _fit_feedback(
+            chapter=report.chapter, report_hash_value=review_report_hash,
+            draft_revision=draft_revision, items=compressed, preserve=preserve,
+            summary=summary, round_number=round_number)
+        if candidate is not None:
+            return candidate
+    raise RevisionFeedbackError(
+        "REVISION_FEEDBACK_TOO_LARGE", "required BLOCKER/MAJOR feedback cannot fit safely")
 
 
 def _normalize(value: str) -> str:
@@ -222,8 +321,10 @@ def issue_fingerprint(issue: ReviewIssue | RevisionItem) -> str:
         start, end, anchor = issue.line_start, issue.line_end, issue.anchor
     else:
         raise RevisionFeedbackError("INVALID_REVISION_ITEM")
+    location = (["lines", start, end] if start is not None and end is not None
+                else ["anchor", _normalize(anchor or "")])
     payload = json.dumps(
-        [category, _normalize(title), start, end, _normalize(anchor or "")],
+        [category, _normalize(title), location],
         ensure_ascii=False, separators=(",", ":"), allow_nan=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

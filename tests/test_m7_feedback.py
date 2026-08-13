@@ -10,7 +10,6 @@ from core.review_preflight import PreflightIssue, ReviewPreflightResult
 from core.revision_feedback import (
     MAX_FEEDBACK_CHARS,
     MAX_REVISION_ISSUES,
-    NON_REWRITEABLE_PREFLIGHT_CODES,
     REWRITEABLE_CATEGORIES,
     RevisionFeedback,
     RevisionFeedbackError,
@@ -22,6 +21,8 @@ from core.revision_feedback import (
     is_rewriteable_review,
     is_stalled_review,
     major_blocker_fingerprints,
+    non_rewriteable_preflight_codes,
+    parse_revision_feedback,
     render_revision_feedback_data,
 )
 
@@ -98,9 +99,49 @@ def test_builder_applies_field_and_total_caps_deterministically():
     assert all(len(value) <= 500 for value in a.preserve)
 
 
+def test_twenty_major_issues_are_never_silently_dropped_to_fit_total_cap():
+    issues = [_issue(i, "MAJOR", suggestion="x" * 1_000, title="y" * 300,
+                     location=ReviewLocation(i + 1, i + 1, "z" * 300))
+              for i in range(20)]
+    feedback = build_revision_feedback(
+        _report(issues, strengths=("p" * 500,) * 3, summary="s" * 5_000),
+        review_report_hash="a" * 64, draft_revision="b" * 64, round_number=1,
+    )
+    assert len(feedback.must_fix) == 20
+    assert all(item.severity == "MAJOR" for item in feedback.must_fix)
+    assert len(canonical_feedback_json(feedback)) <= MAX_FEEDBACK_CHARS
+
+
+def test_more_than_twenty_blocker_major_issues_fails_instead_of_hiding_one():
+    with pytest.raises(RevisionFeedbackError) as caught:
+        build_revision_feedback(
+            _report([_issue(i, "MAJOR") for i in range(21)]),
+            review_report_hash="a" * 64, draft_revision="b" * 64, round_number=1,
+        )
+    assert caught.value.code == "REVISION_FEEDBACK_TOO_LARGE"
+
+
+def test_strict_parser_rejects_unknown_nested_types_and_raw_oversize():
+    feedback = build_revision_feedback(
+        _report([_issue(1)]), review_report_hash="a" * 64,
+        draft_revision="b" * 64, round_number=1,
+    )
+    raw = canonical_feedback_json(feedback)
+    assert parse_revision_feedback(raw) == feedback
+
+    top_unknown = json.loads(raw); top_unknown["evidence"] = "forbidden"
+    nested_unknown = json.loads(raw); nested_unknown["must_fix"][0]["evidence"] = "forbidden"
+    wrong_type = json.loads(raw); wrong_type["must_fix"] = {"0": wrong_type["must_fix"][0]}
+    for payload in (top_unknown, nested_unknown, wrong_type):
+        with pytest.raises(RevisionFeedbackError):
+            parse_revision_feedback(json.dumps(payload))
+    with pytest.raises(RevisionFeedbackError) as caught:
+        parse_revision_feedback(raw + (" " * MAX_FEEDBACK_CHARS))
+    assert caught.value.code == "REVISION_FEEDBACK_TOO_LARGE"
+
+
 def test_fixed_rewriteability_uses_preflight_codes_not_issue_titles():
     assert "DIALOGUE" in REWRITEABLE_CATEGORIES
-    assert "DRAFT_TRUNCATED_FOR_REVIEW" in NON_REWRITEABLE_PREFLIGHT_CODES
     report = _report([_issue(1, "BLOCKER", "DIALOGUE", title="DOCTOR_FAILED")])
     clear = ReviewPreflightResult(2, "b" * 64, (), True, True)
     assert is_rewriteable_review(report, clear)
@@ -110,6 +151,12 @@ def test_fixed_rewriteability_uses_preflight_codes_not_issue_titles():
         True, False,
     )
     assert not is_rewriteable_review(report, blocked)
+    unknown = ReviewPreflightResult(
+        2, "b" * 64, (PreflightIssue("BLOCKER", "FUTURE_INTEGRITY_BLOCKER", "bad"),),
+        True, False,
+    )
+    assert non_rewriteable_preflight_codes(unknown) == ("FUTURE_INTEGRITY_BLOCKER",)
+    assert not is_rewriteable_review(report, unknown)
 
 
 def test_fingerprint_is_normalized_evidence_free_and_stall_requires_same_nonempty_set():
@@ -126,6 +173,15 @@ def test_fingerprint_is_normalized_evidence_free_and_stall_requires_same_nonempt
     assert is_stalled_review(old, current_same)
     assert not is_stalled_review(old, progress)
     assert not is_stalled_review((), ())
+
+
+def test_fingerprint_prefers_lines_and_uses_anchor_only_without_lines():
+    at_lines_a = _issue(1, title="same", location=ReviewLocation(4, 6, "first wording"))
+    at_lines_b = _issue(2, title="same", location=ReviewLocation(4, 6, "changed wording"))
+    assert issue_fingerprint(at_lines_a) == issue_fingerprint(at_lines_b)
+    at_anchor_a = _issue(3, title="same", location=ReviewLocation(None, None, "  Main   Hall "))
+    at_anchor_b = _issue(4, title="same", location=ReviewLocation(None, None, "main hall"))
+    assert issue_fingerprint(at_anchor_a) == issue_fingerprint(at_anchor_b)
 
 
 def test_render_is_bounded_canonical_data_and_keeps_injection_unprivileged():

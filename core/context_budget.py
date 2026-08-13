@@ -89,6 +89,8 @@ def _render_items(items: list[PlannedContextItem], profile: str = "writer") -> s
             tag = "REVIEW_SUBJECT"
         elif item.type == "REVIEW_PROVENANCE":
             tag = "PROVENANCE"
+        elif item.type == "REVIEW_FEEDBACK":
+            tag = "REVIEW_FEEDBACK_DATA"
         else:
             tag = "FACT_SOURCE"
         text = item.text

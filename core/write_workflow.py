@@ -11,12 +11,13 @@ from agents.writer import WriterRequest, WriterRunner
 from core.ai_draft import AIChapterDraftService
 from core.chapter import confirmed_path, draft_path, parse_frontmatter
 from core.context import ContextItem, collect_project_context, collect_recent_chapter_metadata
-from core.context_budget import ContextBudgetPlan, plan_context, render_writer_context
+from core.context_budget import ContextBudgetError, ContextBudgetPlan, plan_context, render_writer_context
 from core.generation import GenerationWorkspace, merge_continuation
 from core.mutation import ABSENT, file_revision
 from core.relevance import build_relevance_source, resolve_relevant_entities
 from llm.provider import BaseProvider, CONTEXT_TOO_LONG, ProviderError
 from llm.types import Usage
+from core.revision_feedback import RevisionFeedback, feedback_hash
 
 
 class WriteWorkflowError(Exception):
@@ -37,7 +38,7 @@ class WriteRequest:
     mode: str = "new"
     plan_only: bool = False
     stream: bool = True
-    revision_feedback: object | None = None
+    revision_feedback: RevisionFeedback | None = None
 
 
 @dataclasses.dataclass
@@ -93,14 +94,24 @@ def _planner_items(project, chapter: int) -> list[ContextItem]:
 def _feedback_item(feedback) -> ContextItem | None:
     if feedback is None:
         return None
-    render = getattr(feedback, "render_data", None)
-    if not callable(render):
+    if not isinstance(feedback, RevisionFeedback):
         raise WriteWorkflowError("INVALID_REVISION_FEEDBACK", "feedback must be bounded RevisionFeedback")
-    text = render()
+    text = feedback.render_data()
     return ContextItem(
         "review-feedback", "REVIEW_FEEDBACK", 98, text, len(text),
-        BaseProvider.estimate_tokens(text), getattr(feedback, "review_report_hash", None),
+        BaseProvider.estimate_tokens(text), feedback_hash(feedback),
     )
+
+
+def _require_full_feedback(plan: ContextBudgetPlan, feedback: RevisionFeedback | None) -> None:
+    if feedback is None:
+        return
+    rows = [item for item in plan.selected_items if item.type == "REVIEW_FEEDBACK"]
+    if len(rows) != 1 or rows[0].status != "KEEP" or rows[0].was_truncated:
+        raise WriteWorkflowError(
+            "REVISION_FEEDBACK_CONTEXT_INSUFFICIENT",
+            "bounded review feedback cannot fit intact in model context",
+        )
 
 
 def _load_item(project, rel: str, typ: str, priority: int) -> ContextItem:
@@ -178,12 +189,22 @@ class WriteWorkflow:
             + 128
         )
         cfg = self.writer_provider.config
-        return plan_context(
-            items,
-            model_max_tokens=cfg.max_context_tokens,
-            reserve_output_tokens=int(self.settings.context.get("reserve_output_tokens", 4096)),
-            fixed_prompt_tokens=fixed,
-        )
+        try:
+            plan = plan_context(
+                items,
+                model_max_tokens=cfg.max_context_tokens,
+                reserve_output_tokens=int(self.settings.context.get("reserve_output_tokens", 4096)),
+                fixed_prompt_tokens=fixed,
+            )
+        except ContextBudgetError as exc:
+            if req.revision_feedback is not None:
+                raise WriteWorkflowError(
+                    "REVISION_FEEDBACK_CONTEXT_INSUFFICIENT",
+                    "review feedback cannot fit alongside authoritative context",
+                ) from exc
+            raise
+        _require_full_feedback(plan, req.revision_feedback)
+        return plan
 
     def run(
         self,
@@ -242,6 +263,17 @@ class WriteWorkflow:
             expected = sidecar.get("base_revision", ABSENT)
             if file_revision(target) != expected:
                 raise WriteWorkflowError("STALE_DRAFT_REVISION", "resume base changed")
+            expected_feedback_hash = sidecar.get("revision_feedback_hash")
+            if expected_feedback_hash:
+                if not isinstance(req.revision_feedback, RevisionFeedback):
+                    raise WriteWorkflowError("REVISION_FEEDBACK_REQUIRED", "resume requires original feedback")
+                if (feedback_hash(req.revision_feedback) != expected_feedback_hash
+                        or req.revision_feedback.review_report_hash != sidecar.get("review_report_hash")
+                        or req.revision_feedback.chapter != chapter
+                        or req.revision_feedback.draft_revision != expected):
+                    raise WriteWorkflowError("STALE_REVISION_FEEDBACK", "resume feedback does not match partial")
+            elif req.revision_feedback is not None:
+                raise WriteWorkflowError("STALE_REVISION_FEEDBACK", "partial was not created from feedback")
             partial = workspace.text()
             if not partial:
                 workspace.cleanup()
@@ -252,6 +284,11 @@ class WriteWorkflow:
                 raise WriteWorkflowError(
                     "INSUFFICIENT_WRITING_PLAN", "需要章节细纲或 --instruction"
                 )
+            if req.revision_feedback is not None:
+                if req.mode != "rewrite" or req.revision_feedback.chapter != chapter:
+                    raise WriteWorkflowError("INVALID_REVISION_FEEDBACK", "feedback is only valid for matching rewrite")
+                if req.revision_feedback.draft_revision != expected:
+                    raise WriteWorkflowError("STALE_REVISION_FEEDBACK", "feedback does not match current draft")
             stage("Planning")
             planner_items = _planner_items(project, chapter)
             feedback = _feedback_item(req.revision_feedback)
@@ -264,6 +301,7 @@ class WriteWorkflow:
                 instruction=req.instruction,
                 project_items=planner_items,
             )
+            _require_full_feedback(planned.context_plan, req.revision_feedback)
             card = planned.card
             provenance_task_hash = card.task_hash
             chief_usages.extend(planned.usages)
@@ -297,6 +335,9 @@ class WriteWorkflow:
             "model": self.writer_provider.config.model,
             "resume_card": card.resume_dict(),
         }
+        if req.revision_feedback is not None:
+            metadata["revision_feedback_hash"] = feedback_hash(req.revision_feedback)
+            metadata["review_report_hash"] = req.revision_feedback.review_report_hash
         if mode != "resume":
             workspace.prepare(metadata)
 
