@@ -114,6 +114,20 @@ def _require_full_feedback(plan: ContextBudgetPlan, feedback: RevisionFeedback |
         )
 
 
+def _resume_card_metadata(card: WritingTaskCard,
+                          feedback: RevisionFeedback | None) -> dict:
+    """Return resumable metadata without persisting Reviewer/Chief-controlled text."""
+    if feedback is None:
+        return card.resume_dict()
+    safe_card = WritingTaskCard(
+        chapter=card.chapter,
+        goal="Continue the bound review revision",
+        target_chars=card.target_chars,
+        source="revision-resume",
+    )
+    return safe_card.resume_dict()
+
+
 def _load_item(project, rel: str, typ: str, priority: int) -> ContextItem:
     path = project.store.safe_path(project.id, rel)
     text = path.read_text(encoding="utf-8")
@@ -229,6 +243,7 @@ class WriteWorkflow:
 
         target = draft_path(project, chapter)
         existing = ""
+        old_meta = {}
         expected = file_revision(target)
         if target.exists():
             old_meta, existing = parse_frontmatter(target.read_text(encoding="utf-8"))
@@ -253,7 +268,7 @@ class WriteWorkflow:
                 card = WritingTaskCard(**sidecar["resume_card"], user_instruction="", chief_brief="")
             except (KeyError, TypeError, ValueError) as exc:
                 raise WriteWorkflowError("INVALID_PARTIAL_SIDECAR", str(exc)) from exc
-            title = sidecar.get("title") or card.title
+            title = sidecar.get("title") or old_meta.get("title") or card.title
             provenance_task_hash = sidecar.get("task_hash", "")
             if not provenance_task_hash:
                 raise WriteWorkflowError("INVALID_PARTIAL_SIDECAR", "missing task_hash")
@@ -328,12 +343,12 @@ class WriteWorkflow:
 
         metadata = {
             "mode": mode,
-            "title": title,
+            "title": "" if req.revision_feedback is not None else title,
             "base_revision": expected,
             "task_hash": provenance_task_hash,
             "context_hash": context_plan.context_hash,
             "model": self.writer_provider.config.model,
-            "resume_card": card.resume_dict(),
+            "resume_card": _resume_card_metadata(card, req.revision_feedback),
         }
         if req.revision_feedback is not None:
             metadata["revision_feedback_hash"] = feedback_hash(req.revision_feedback)
@@ -370,6 +385,7 @@ class WriteWorkflow:
                 if exc.code != CONTEXT_TOO_LONG or workspace.text():
                     raise
                 context_plan = context_plan.shrink(0.65)
+                _require_full_feedback(context_plan, req.revision_feedback)
                 writer_req.context_plan = context_plan
                 workspace.update_metadata(context_hash=context_plan.context_hash)
                 writer_result = self.writer.run(
