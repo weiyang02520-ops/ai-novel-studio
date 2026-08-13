@@ -30,6 +30,18 @@ REVIEW_REPORT_SCHEMA = {
 }
 
 
+def build_review_messages(system_prompt: str, *, chapter: int, instruction: str,
+                          rendered_context: str) -> list[ChatMessage]:
+    """Canonical production request renderer shared with context budgeting."""
+    user = (
+        f"目标章: {chapter}\n用户审稿要求: {instruction}\n"
+        f"Schema: {json.dumps(REVIEW_REPORT_SCHEMA, ensure_ascii=False, separators=(',', ':'))}\n"
+        f"[REVIEW_DATA_BEGIN]\n{rendered_context}\n[REVIEW_DATA_END]\n"
+        "只返回一个符合 Schema 的 JSON object。"
+    )
+    return [ChatMessage("system", system_prompt), ChatMessage("user", user)]
+
+
 class ReviewerError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code
@@ -75,14 +87,10 @@ class ReviewerRunner:
         return parsed
 
     def run(self, req: ReviewRequest, *, rendered_context: str) -> ReviewerResult:
-        user = (
-            f"目标章: {req.chapter}\n用户审稿要求: {req.instruction}\n"
-            f"Schema: {json.dumps(REVIEW_REPORT_SCHEMA, ensure_ascii=False, separators=(',', ':'))}\n"
-            f"[REVIEW_DATA_BEGIN]\n{rendered_context}\n[REVIEW_DATA_END]\n"
-            "只返回一个符合 Schema 的 JSON object。"
-        )
-        response = self.provider.chat([
-            ChatMessage("system", self.system_prompt), ChatMessage("user", user)], tools=None)
+        messages = build_review_messages(
+            self.system_prompt, chapter=req.chapter, instruction=req.instruction,
+            rendered_context=rendered_context)
+        response = self.provider.chat(messages, tools=None)
         repaired = False
         try:
             parsed = self._validated(response, req)

@@ -107,6 +107,16 @@ def _render_tokens(items: list[PlannedContextItem], profile: str) -> int:
     return BaseProvider.estimate_tokens(_render_items(items, profile))
 
 
+def _priority(item: ContextItem, profile: str) -> int:
+    if profile == "review":
+        # Review-only low-value order: derived memory drops first, then summary.
+        review_low = {"MEMORY": 5, "OUTLINE_SUMMARY": 15,
+                      "REVIEW_PROVENANCE": 20, "PROJECT": 30}
+        if item.type in review_low:
+            return review_low[item.type]
+    return PRIORITY.get(item.type, item.priority)
+
+
 def _truncate_text(item_type: str, text: str, max_chars: int) -> str:
     """Return a deterministic bounded slice; review subjects retain all regions."""
     if max_chars >= len(text):
@@ -132,9 +142,9 @@ def _truncate_text(item_type: str, text: str, max_chars: int) -> str:
             f"\n[TAIL]\n{tail}")
 
 
-def _planned(item: ContextItem, text: str, status: str) -> PlannedContextItem:
+def _planned(item: ContextItem, text: str, status: str, profile: str) -> PlannedContextItem:
     return PlannedContextItem(
-        item.source, item.type, PRIORITY.get(item.type, item.priority), item.chars,
+        item.source, item.type, _priority(item, profile), item.chars,
         len(text), BaseProvider.estimate_tokens(text), status, text, item.revision,
     )
 
@@ -158,7 +168,7 @@ def plan_context(items: list[ContextItem], *, model_max_tokens: int,
     def order_key(item):
         recent = (-int(item.source.rsplit("ch", 1)[-1].split(".", 1)[0])
                   if item.type == "RECENT_CHAPTER" else 0)
-        return (-PRIORITY.get(item.type, item.priority), recent, item.source)
+        return (-_priority(item, render_profile), recent, item.source)
 
     ordered = sorted(items, key=order_key)
     selected: list[PlannedContextItem] = []
@@ -169,7 +179,7 @@ def plan_context(items: list[ContextItem], *, model_max_tokens: int,
         "REVIEW_DRAFT", "CHAPTER_OUTLINE", "RULES",
         "PLANNER_CHAPTER_OUTLINE", "PLANNER_RULES",
     }]
-    critical_full = [_planned(item, item.text, "KEEP") for item in critical]
+    critical_full = [_planned(item, item.text, "KEEP", render_profile) for item in critical]
     if critical and _render_tokens(critical_full, render_profile) > budget:
         for index, item in enumerate(critical):
             remaining_critical = len(critical) - index
@@ -179,39 +189,39 @@ def plan_context(items: list[ContextItem], *, model_max_tokens: int,
             lo, hi = 0, len(item.text)
             while lo < hi:
                 mid = (lo + hi + 1) // 2
-                candidate = _planned(item, _truncate_text(item.type, item.text, mid), "TRUNCATE")
+                candidate = _planned(item, _truncate_text(item.type, item.text, mid), "TRUNCATE", render_profile)
                 if _render_tokens(selected + [candidate], render_profile) <= ceiling:
                     lo = mid
                 else:
                     hi = mid - 1
             if lo:
-                candidate = _planned(item, _truncate_text(item.type, item.text, lo), "TRUNCATE")
+                candidate = _planned(item, _truncate_text(item.type, item.text, lo), "TRUNCATE", render_profile)
                 selected.append(candidate)
                 truncated.append(candidate)
             else:
-                dropped.append(_planned(item, "", "DROP"))
+                dropped.append(_planned(item, "", "DROP", render_profile))
             handled.add(item.source)
     for item in ordered:
         if item.source in handled:
             continue
-        full = _planned(item, item.text, "KEEP")
+        full = _planned(item, item.text, "KEEP", render_profile)
         if _render_tokens(selected + [full], render_profile) <= budget:
             selected.append(full)
             continue
         lo, hi = 0, len(item.text)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            candidate = _planned(item, _truncate_text(item.type, item.text, mid), "TRUNCATE")
+            candidate = _planned(item, _truncate_text(item.type, item.text, mid), "TRUNCATE", render_profile)
             if _render_tokens(selected + [candidate], render_profile) <= budget:
                 lo = mid
             else:
                 hi = mid - 1
         if lo:
-            candidate = _planned(item, _truncate_text(item.type, item.text, lo), "TRUNCATE")
+            candidate = _planned(item, _truncate_text(item.type, item.text, lo), "TRUNCATE", render_profile)
             selected.append(candidate)
             truncated.append(candidate)
         else:
-            dropped.append(_planned(item, "", "DROP"))
+            dropped.append(_planned(item, "", "DROP", render_profile))
 
     estimated = _render_tokens(selected, render_profile)
     plan = ContextBudgetPlan(

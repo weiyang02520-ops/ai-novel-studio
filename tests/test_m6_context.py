@@ -10,6 +10,7 @@ from core.config import ModelConfig
 from core.context_budget import render_review_context
 from core.mutation import ABSENT, file_revision
 from core.project import create_project, validate_project
+from core.relevance import RelevanceError
 from core.review_context import ReviewContextBuilder, render_review_request
 from core.review_preflight import ReviewPreflight, merge_preflight_issues
 from core.storage import ProjectStore, atomic_write_text
@@ -91,6 +92,42 @@ def test_review_budget_is_actual_render_strict_stable_and_drops_memory_first(pro
                    for x in p1.dropped_items)
 
 
+def test_review_budget_counts_the_exact_messages_sent_by_runner(project):
+    from agents.reviewer import ReviewRequest, ReviewerRunner
+    from llm.types import ChatResult
+
+    payload = {
+        "chapter": 1, "verdict": "PASS", "summary": "ok", "issues": [],
+        "strengths": [], "task_fulfillment": "ok", "continuity_assessment": "ok",
+        "style_assessment": "ok", "logic_assessment": "ok", "confidence": 1.0,
+        "source": "reviewer",
+    }
+    class CapturingProvider(StubProvider):
+        def __init__(self):
+            super().__init__(4000)
+            self.messages = None
+        def chat(self, messages, **kwargs):
+            import json
+            self.messages = messages
+            return ChatResult(json.dumps(payload), model="reviewer")
+
+    provider = CapturingProvider()
+    plan = ReviewContextBuilder(provider, "review system", reserve_output_tokens=600).build(project, 1)
+    ReviewerRunner(provider, "review system").run(
+        ReviewRequest(project, 1, plan.draft_revision, plan),
+        rendered_context=render_review_context(plan.shared))
+    actual = BaseProvider.estimate_messages_tokens(provider.messages)
+    assert actual + plan.shared.reserve_output_tokens + plan.shared.safety_margin_tokens <= 4000
+
+
+def test_review_specific_budget_drops_memory_before_other_noncritical_sources(project):
+    plan = builder(2550, reserve_output_tokens=400).build(project, 1)
+    dropped = [x.type for x in plan.dropped_items]
+    assert "MEMORY" in dropped
+    assert "PROJECT" not in dropped
+    assert "REVIEW_PROVENANCE" not in dropped
+
+
 def test_huge_review_draft_uses_deterministic_head_middle_tail_marker(project):
     chapter = draft_path(project, 1)
     text = chapter.read_text(encoding="utf-8")
@@ -108,6 +145,9 @@ def test_huge_review_draft_uses_deterministic_head_middle_tail_marker(project):
     assert "TAIL-ANCHOR" in draft.text
     assert plan.draft_truncated
     assert plan.context_hash == builder(7000, reserve_output_tokens=600).build(project, 1).context_hash
+    preflight = ReviewPreflight().run(project, 1, context_plan=plan)
+    assert any(x.code == "DRAFT_TRUNCATED_FOR_REVIEW" for x in preflight.blockers)
+    assert preflight.can_review and not preflight.can_ready
 
 
 def test_review_preflight_happy_missing_outline_and_issue_merge(project):
@@ -164,6 +204,28 @@ def test_review_preflight_duplicate_h1_is_blocker(project):
     result = ReviewPreflight().run(project, 1)
     assert any(x.code == "DUPLICATE_CHARACTER_H1" and x.severity == "BLOCKER"
                for x in result.issues)
+
+
+def test_relevance_world_override_missing_and_ambiguous(project):
+    assert "world/rune-gate.md" in builder().build(project, 1, world=["Rune Gate"]).relevance.world
+    with pytest.raises(RelevanceError, match="WORLD_NOT_FOUND"):
+        builder().build(project, 1, world=["Missing Place"])
+    atomic_write_text(project.dir / "world/other.md", "# Rune Gate\nDuplicate.")
+    with pytest.raises(RelevanceError, match="AMBIGUOUS_WORLD"):
+        builder().build(project, 1, world=["Rune Gate"])
+
+
+def test_preflight_invalid_utf8_and_non_draft_statuses(project):
+    path = draft_path(project, 1)
+    original = path.read_bytes()
+    path.write_bytes(original + b"\xff")
+    assert any(x.code == "INVALID_UTF8" for x in ReviewPreflight().run(project, 1).blockers)
+    path.write_bytes(original)
+    text = path.read_text(encoding="utf-8")
+    for status in ("ready", "reviewing", "confirmed"):
+        atomic_write_text(path, text.replace("status: draft", f"status: {status}"))
+        assert any(x.code == "INVALID_DRAFT_STATUS"
+                   for x in ReviewPreflight().run(project, 1).blockers)
 
 
 def test_project_validation_is_origin_aware_for_m6_states(project):

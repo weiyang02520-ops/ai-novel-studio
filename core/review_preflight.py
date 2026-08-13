@@ -42,7 +42,7 @@ class ReviewPreflight:
         "INVALID_DRAFT_STATUS", "CONFIRMED_CHAPTER_CONFLICT",
     }
 
-    def run(self, project, chapter: int, *, allow_reviewing: bool = False) -> ReviewPreflightResult:
+    def run(self, project, chapter: int, *, context_plan=None) -> ReviewPreflightResult:
         issues: list[PreflightIssue] = []
         seen: set[tuple[str, str, str]] = set()
 
@@ -80,7 +80,7 @@ class ReviewPreflight:
             if meta.get("origin") != "ai":
                 add("BLOCKER", "MANUAL_DRAFT_NOT_REVIEWABLE",
                     "Reviewer accepts only origin=ai drafts", f"drafts/{path.name}")
-            allowed = {"draft", "reviewing"} if allow_reviewing else {"draft"}
+            allowed = {"draft"}
             if meta.get("status") not in allowed:
                 add("BLOCKER", "INVALID_DRAFT_STATUS",
                     f"status={meta.get('status')!r}, allowed={sorted(allowed)}",
@@ -112,6 +112,10 @@ class ReviewPreflight:
                 severity = "BLOCKER" if issue.get("severity") == "ERROR" else "WARNING"
                 add(severity, str(issue.get("code", "DOCTOR_ISSUE")),
                     str(issue.get("message", "")))
+
+        if context_plan is not None and bool(getattr(context_plan, "draft_truncated", False)):
+            add("BLOCKER", "DRAFT_TRUNCATED_FOR_REVIEW",
+                "The complete draft did not fit review context; PASS cannot be verified")
 
         blockers = [x for x in issues if x.severity == "BLOCKER"]
         fatal = any(x.code in self._FATAL for x in blockers)

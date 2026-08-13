@@ -6,7 +6,6 @@ import json
 from typing import Iterable
 
 from llm.provider import BaseProvider
-from llm.types import ChatMessage
 
 from .chapter import Chapter, read_draft
 from .context import ContextItem, collect_project_context
@@ -54,18 +53,12 @@ class ReviewContextPlan:
         return dataclasses.replace(self, shared=self.shared.shrink(factor))
 
 
-def _request_envelope(chapter: int, instruction: str, context: str) -> str:
-    return (
-        f"TARGET_CHAPTER: {chapter}\n"
-        f"REVIEW_INSTRUCTION: {instruction}\n"
-        f"[REVIEW_CONTEXT_BEGIN]\n{context}\n[REVIEW_CONTEXT_END]\n"
-        "Return only the required review JSON object."
-    )
-
-
 def render_review_request(plan: ReviewContextPlan) -> str:
-    """Render exactly the user message whose wrapper was included in the budget."""
-    return _request_envelope(plan.chapter, plan.instruction, render_review_context(plan.shared))
+    """Render the exact canonical user message used by ReviewerRunner."""
+    from agents.reviewer import build_review_messages
+    return build_review_messages(
+        "", chapter=plan.chapter, instruction=plan.instruction,
+        rendered_context=render_review_context(plan.shared))[1].content
 
 
 def _load_item(project, rel: str, typ: str, priority: int) -> ContextItem:
@@ -148,10 +141,10 @@ class ReviewContextBuilder:
             len(provenance), BaseProvider.estimate_tokens(provenance), revision,
         ))
 
-        empty_user = _request_envelope(chapter, instruction, "")
-        fixed = BaseProvider.estimate_messages_tokens([
-            ChatMessage("system", self.system_prompt), ChatMessage("user", empty_user),
-        ]) + 16
+        from agents.reviewer import build_review_messages
+        fixed = BaseProvider.estimate_messages_tokens(build_review_messages(
+            self.system_prompt, chapter=chapter, instruction=instruction,
+            rendered_context="")) + 16
         shared = plan_context(
             items,
             model_max_tokens=self.provider.config.max_context_tokens,
