@@ -150,6 +150,7 @@ def doctor(project: Project) -> list[dict[str, str]]:
     drafts_dir = project.store.safe_path(project.id, "drafts")
     if drafts_dir.exists():
         from .chapter import parse_frontmatter
+        from .review import ReviewError, report_rel, require_current_pass_report
         for path in sorted(drafts_dir.glob("*.draft.md")):
             try:
                 meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -164,6 +165,32 @@ def doctor(project: Project) -> list[dict[str, str]]:
             if state not in {"complete", "truncated"}:
                 add("ERROR", "AI_DRAFT_INVALID_GENERATION_STATE",
                     f"{path.name}: generation_state={state!r}")
+            if meta.get("status") == "ready":
+                chapter = int(meta["chapter"])
+                # Inspect the lexical path before ProjectStore resolves symlinks.
+                # A same-project symlink is still forbidden for review artifacts.
+                lexical = project.dir / report_rel(chapter)
+                current = lexical
+                unsafe = False
+                while current != project.dir and current.is_relative_to(project.dir):
+                    if current.is_symlink():
+                        unsafe = True
+                        break
+                    current = current.parent
+                if unsafe:
+                    add("ERROR", "UNSAFE_REVIEW_PATH",
+                        f"ch{chapter:04d}: review report path contains a symlink")
+                    continue
+                try:
+                    require_current_pass_report(project, chapter, file_revision(path))
+                except ReviewError as exc:
+                    if exc.code == "REVIEW_NOT_FOUND":
+                        code = "AI_READY_REVIEW_MISSING"
+                    elif exc.code == "STALE_REVIEW_REPORT":
+                        code = "AI_READY_REVIEW_STALE"
+                    else:
+                        code = "AI_READY_REVIEW_INVALID"
+                    add("ERROR", code, f"{path.name}: {exc}")
     # Explicitly report symlinks that cannot stay inside the project.
     for path in project.dir.rglob("*"):
         if path.is_symlink():
