@@ -196,4 +196,3 @@ def test_compose_status_marks_partial_resumable_only_for_interrupted_writer(tmp_
     assert status.partial_exists is True
     assert status.compose_phase == "WRITER_INTERRUPTED"
     assert status.can_resume is True
-
