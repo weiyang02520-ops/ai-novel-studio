@@ -376,9 +376,14 @@ def validate_project(store: ProjectStore, project_id: str) -> list[str]:
             except DataIntegrityError as e:
                 issues.append(f"drafts/{f.name}: {e}")
                 continue
-            if meta.get("status") not in ("draft", "user_confirmed"):
+            origin = meta.get("origin")
+            allowed = (("draft", "user_confirmed") if origin == "manual"
+                       else ("draft", "reviewing", "ready") if origin == "ai"
+                       else ())
+            if meta.get("status") not in allowed:
                 issues.append(
-                    f"drafts/{f.name}: status={meta.get('status')!r}(应为 draft/user_confirmed)")
+                    f"drafts/{f.name}: origin={origin!r}, status={meta.get('status')!r}, "
+                    f"allowed={allowed}")
             base = f.name[: -len(".draft.md")]
             parsed = parse_chapter_number_from_filename(base + ".md")
             if parsed is not None and parsed != int(meta["chapter"]):

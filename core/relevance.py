@@ -33,7 +33,25 @@ def _index(project, root):
     return out
 
 def resolve_relevant_entities(project, card, source_text: str, *, characters=None, world=None):
-    reasons, selected_c, selected_w = {}, [], []
+    character_requests = [(x, "TASK_CARD") for x in card.characters]
+    character_requests += [(x, "MANUAL") for x in (characters or [])]
+    world_requests = [(x, "TASK_CARD") for x in card.world_elements]
+    world_requests += [(x, "MANUAL") for x in (world or [])]
+    return _resolve_relevant_paths(project, source_text, character_requests, world_requests)
+
+
+def resolve_relevant_paths(project, source_text: str, *, characters=None, world=None):
+    """Resolve review entities without inventing or depending on a TaskCard."""
+    return _resolve_relevant_paths(
+        project,
+        source_text,
+        [(x, "MANUAL") for x in (characters or [])],
+        [(x, "MANUAL") for x in (world or [])],
+    )
+
+
+def _resolve_relevant_paths(project, source_text, character_requests, world_requests):
+    reasons = {}
     def resolve(index, requested, code, kind):
         chosen=[]
         for name, reason in requested:
@@ -47,8 +65,6 @@ def resolve_relevant_entities(project, card, source_text: str, *, characters=Non
             if (title and title.casefold() in haystack) or slug.casefold() in haystack:
                 if rel not in chosen: chosen.append(rel); reasons.setdefault(rel,[]).append("AUTO")
         return sorted(chosen)
-    creq=[(x,"TASK_CARD") for x in card.characters]+[(x,"MANUAL") for x in (characters or [])]
-    wreq=[(x,"TASK_CARD") for x in card.world_elements]+[(x,"MANUAL") for x in (world or [])]
-    selected_c=resolve(_index(project,"characters"),creq,"CHARACTER","character")
-    selected_w=resolve(_index(project,"world"),wreq,"WORLD","world")
+    selected_c=resolve(_index(project,"characters"),character_requests,"CHARACTER","character")
+    selected_w=resolve(_index(project,"world"),world_requests,"WORLD","world")
     return RelevantEntities(selected_c, selected_w, reasons)
