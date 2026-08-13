@@ -10,100 +10,98 @@
 
 ## 2. 当前阶段
 
-**M5 FINAL CLOSEOUT complete. Awaiting External ChatGPT final M5 review.**
+**M6 REVIEWER SUPER BATCH implementation complete. Awaiting External ChatGPT M6 review.**
 
-M6 NOT AUTHORIZED.
+M7 NOT AUTHORIZED.
 
 ## 3. 本轮完成内容
 
-- Chief 输出严格 `WritingTaskCard`，支持一次 JSON repair 与安全 fallback；Writer AgentDef 无工具且只输出正文。
-- Relevant Entity Resolver 合并 TaskCard、文本自动识别与 CLI override，并拒绝 missing/ambiguous identity。
-- Dynamic ContextBudget 提供优先级、裁剪/丢弃 manifest、确定性 context hash 与一次 context-too-long shrink。
-- Writer 使用真实 `stream_chat`；正文逐 chunk flush 到非 canonical partial，支持中断、跨进程 resume、continue 与 rewrite。
-- `AIChapterDraftService` 使用 raw-byte revision guard、Snapshot/history、atomic write、post-write verify 与 rollback；只写 `origin=ai, status=draft`。
-- 新增 `write`、`context plan`、`draft`/`draft partial` CLI；context plan 完全离线。
-- AI draft confirm guard、frontmatter provenance、chapter list 与 Knowledge Doctor 检查已接入。
-- Final hardening counts rendered context wrappers strictly, keeps newest recent chapters first, refuses partial overwrite, and budgets continuation tails.
-- Per-chapter cross-process locks close application-level confirm/finalize/partial-prepare races; stale external bytes still win.
-- Stream protocol tool calls are hard failures even after text; public TaskCard output excludes opaque Chief brief.
-- Chief Planner now has a strict, prioritized context plan using the Chief model window and one independent 0.65 overflow retry.
-- AI confirm branches by origin: manual draft/user_confirmed, AI ready only, with confirmed origin preserved; no READY transition exists in M5.
-- Partial sidecar stores a redacted resume card and original task hash, never instruction/Chief brief/full context.
-- `--no-stream` performs a true non-stream Provider `chat()` call; offline context planning shares workflow relevance evidence.
+- Reviewer 无工具、只读分析；通过 `BaseProvider.chat()` 返回严格 ReviewReport。
+- ReviewReport 提供固定 enum、大小上限、行号归一化、去重、canonical hash 与一次 schema-only repair；无法证明 PASS 时 fail-closed。
+- Review Context 复用共享 ContextBudget，按实际 messages 计数；draft 最高优先、不注入全书，超大/重试截断阻止 READY。
+- relevance 从 draft、章纲、卷纲、instruction 与显式 override 推断，不伪造 M5 TaskCard。
+- Preflight 合并 Doctor、draft integrity、generation/status、confirmed conflict、空正文与 source ambiguity；模型不能删除 deterministic blocker。
+- 采用方案 B：canonical draft 在网络调用期间保持 `status=draft`；REVIEWING 仅进程内，无 pending sidecar，recover 返回 `NO_PENDING_REVIEW`。
+- ReviewService 以短 chapter lock、draft/report revision CAS、Snapshot/history、atomic write、post-write verify 与 guarded rollback 持久化报告和状态。
+- PASS 才能 `draft → ready`；NEEDS_WORK 保持 draft；Reviewer 永不改正文、调用 Writer 或自动 confirm。
+- AI ready 的 confirm 与 Doctor 都要求 schema/hash 合法且匹配当前 draft revision 的 PASS artifact。
+- 新增 review CLI、Doctor、localhost HTTP E2E 与 privacy/static regression。
 
 ## 4. 本轮修改文件
 
-- `M .ai-handoff/NEXT_TASKS.md`
-- ` M .ai-handoff/PROJECT_STATE.md`
+- `M .ai-handoff/PROJECT_STATE.md`
 - ` M .ai-handoff/REVIEW_REQUEST.md`
-- ` M README.md`
-- ` M adapters/cli/m5.py`
-- ` M agents/planner.py`
-- ` M agents/task_card.py`
-- ` M agents/writer.py`
-- ` M core/chapter.py`
-- ` M core/context_budget.py`
-- ` M core/relevance.py`
-- ` M core/write_workflow.py`
-- ` M docs/context/AGENT_MEMORY.md`
-- ` M docs/context/CHATGPT_MEMORY.md`
 - ` M docs/context/M6_READINESS.md`
-- ` M tests/test_m5.py`
-- ` M tests/test_m5_http_e2e.py`
 
 ## 5. 已验证结果
 
-- `python -m pytest tests/ -v`: **530 passed, 5 skipped, 0 failed**; collected = 535。
-- M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
-- Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
-- Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。
+- `python -m pytest tests/ -v`: **621 passed, 5 skipped, 0 failed**; collected = 626。
+- M6 report/context/preflight/service/workflow/CLI/Doctor/static/privacy suites PASS；正文与 external-race byte invariants PASS。
+- Localhost HTTP subprocess production path：PASS→READY→显式 confirm、NEEDS_WORK、JSON repair、double-malformed fail-closed、context overflow shrink、stale draft race 全部 PASS。
+- M0–M5 regression PASS；Windows SSE interruption mock 采用显式 socket shutdown，避免测试子进程等待伪 EOF。
 - Real external: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
 
 ## 6. 未验证内容
 
-- (待填写)
+- 真实外部 Reviewer Provider：**UNVERIFIED_MISSING_CONFIG**；未索取、读取或打印 API Key。
+- Reviewer 语义质量不作为确定性工程 Gate；PASS 仅表示当前 bounded Context 下未发现 BLOCKER/MAJOR。
 
 ## 7. 当前架构
 
-- `agents/task_card.py`, `agents/planner.py`, `agents/writer.py`: Chief-to-Writer contract and prose runner。
-- `core/relevance.py`, `core/context_budget.py`: deterministic source selection and bounded Writer input。
-- `agents/planner.py`: independently bounded Chief planning context, overflow retry, then separate JSON repair。
-- `core/generation.py`: safe non-canonical partial workspace and exact-overlap merge。
-- `core/ai_draft.py`: canonical AI draft transaction boundary。
-- `core/write_workflow.py`: target validation → plan → context → stream → finalize orchestration。
-- `core/locks.py`: cross-process per-chapter critical-section lock for application mutations。
-- `adapters/cli/m5.py`: display/callback-only M5 CLI adapter。
+- `agents/review_report.py`, `agents/reviewer.py`, `agents/prompts/reviewer_system.md`: strict report contract and provider-independent Reviewer。
+- `core/review_context.py`, `core/review_preflight.py`: bounded context and deterministic fail-closed checks。
+- `core/review.py`: revision-bound report/status transaction, reopen/inspect, Architecture-B no-pending recover contract。
+- `core/review_workflow.py`: preflight → context → review/repair → merge → finalize；网络调用不持锁。
+- `adapters/cli/m6.py`: display/routing-only M6 CLI adapter。
+- `review/chNNNN.review.json`: current review artifact；不保存 prompt/full context/API key。
 
 ## 8. 当前已知问题
 
 - GitHub 仓库可见性此前实测为 public；未擅自变更。
 - Linux headless 无凭据服务时 SecretStore 明确报 BACKEND_UNAVAILABLE，不降级明文。
+- 真实外部 Reviewer 模型质量未验证；Reviewer 是辅助工具，PASS 不代表文学质量客观满分。
 
 ## 9. 本轮关键决策
 
-- (待填写)
+- Reviewer read/analyze only；ReviewService 独占 review/status persistence；正文 body 不变。
+- PASS 必须没有 BLOCKER/MAJOR；任何不确定性 fail-closed。
+- Report 绑定精确 draft revision；draft/report 外部修改使旧结果 stale，外部字节获胜。
+- READY 必须有 current matching PASS；PASS 不 confirm，用户仍需显式 `chapter confirm`。
+- Reviewer context 严格 bounded，不自动注入全书。
+- 方案 B 不持久化 reviewing/pending；recover 明确 `NO_PENDING_REVIEW`。
+- NEEDS_WORK 后只能由用户显式 `write --rewrite`；M7 才拥有自动 Writer↔Reviewer loop。
 
 ## 10. 下一步建议
 
-- (待填写)
+- P0: External ChatGPT M6 Review。
+- P1: M7 Writer↔Reviewer orchestration；**NOT AUTHORIZED**。
 
 ## 11. 希望外部模型重点审查
 
-- (待填写)
+- 尝试 malformed/oversized report、PASS+MAJOR、tiny context 与 retry 后 draft truncation。
+- 尝试 draft/report external race、transaction fault/rollback、READY stale/missing report、symlink path。
+- 验证 Reviewer 无写工具、不调用 Writer/confirm、不泄漏正文/context/secret，不存在 M7 loop。
 
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: b8dad3485b0e ai-checkpoint: update 13 files
+- checkpoint_base_commit: 71b208bec4f5 test: make SSE interruption deterministic on Windows
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): b8dad34 2026-08-12 20:56:16 +0800
-- 时间: 2026-08-13 14:14
+- 最近 commit(本文件生成时): 71b208b 2026-08-13 15:24:53 +0800
+- 时间: 2026-08-13 15:31
 
 ## 13. Critical Files
 
-- (待填写)
+- `agents/review_report.py`, `agents/reviewer.py`, `agents/prompts/reviewer_system.md`
+- `core/review_context.py`, `core/review_preflight.py`, `core/review.py`, `core/review_workflow.py`
+- `core/chapter.py`, `core/history.py`, `core/knowledge.py`
+- `adapters/cli/m6.py`, `adapters/cli/main.py`
+- `tests/test_m6_*.py`, `tests/mock_server.py`
 
 ## 14. Recent Important Changes
 
-- (待填写)
+- 新增 M6 Reviewer 全链路与严格报告/预算/事务/CLI/Doctor/E2E。
+- 强化 history 跨进程串行、guarded rollback 与 AI READY confirm exact PASS artifact 门槛。
+- 修正 Windows localhost SSE interruption fixture 的可靠 EOF，恢复完整回归可终止性。
+- 更新 README、M6/M7 readiness、Agent/ChatGPT memory 与 external review handoff；M7 未启动。

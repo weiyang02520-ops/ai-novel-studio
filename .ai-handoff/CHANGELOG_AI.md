@@ -297,3 +297,12 @@
 - ` M tests/test_m5.py`
 - ` M tests/test_m5_http_e2e.py`
 
+
+## 2026-08-13 15:31 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/PROJECT_STATE.md`
+- ` M .ai-handoff/REVIEW_REQUEST.md`
+- ` M docs/context/M6_READINESS.md`
+

@@ -31,8 +31,16 @@ M7 NOT AUTHORIZED.
 
 ## verified
 
-- M6 target、CLI、transaction、Doctor、localhost HTTP E2E 与旧里程碑 regression 已运行；最终全量精确测试数由交付主线程在 checkpoint 前回填。
+- `python -m pytest tests/ -v`: **621 passed, 5 skipped, 0 failed**; collected = 626。
+- M6 report/context/preflight/service/workflow/CLI/Doctor/static/privacy suites PASS；正文与 external-race byte invariants PASS。
+- Localhost HTTP subprocess production path：PASS→READY→显式 confirm、NEEDS_WORK、JSON repair、double-malformed fail-closed、context overflow shrink、stale draft race 全部 PASS。
+- M0–M5 regression PASS；Windows SSE interruption mock 采用显式 socket shutdown，避免测试子进程等待伪 EOF。
 - Real external: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
+
+## unverified
+
+- 真实外部 Reviewer Provider：**UNVERIFIED_MISSING_CONFIG**；未索取、读取或打印 API Key。
+- Reviewer 语义质量不作为确定性工程 Gate；PASS 仅表示当前 bounded Context 下未发现 BLOCKER/MAJOR。
 
 ## architecture
 
@@ -43,7 +51,7 @@ M7 NOT AUTHORIZED.
 - `adapters/cli/m6.py`: display/routing-only M6 CLI adapter。
 - `review/chNNNN.review.json`: current review artifact；不保存 prompt/full context/API key。
 
-## stable_decisions
+## key_decisions
 
 - Reviewer read/analyze only；ReviewService 独占 review/status persistence；正文 body 不变。
 - PASS 必须没有 BLOCKER/MAJOR；任何不确定性 fail-closed。
@@ -59,7 +67,28 @@ M7 NOT AUTHORIZED.
 - Linux headless 无凭据服务时 SecretStore 明确报 BACKEND_UNAVAILABLE，不降级明文。
 - 真实外部 Reviewer 模型质量未验证；Reviewer 是辅助工具，PASS 不代表文学质量客观满分。
 
-## next
+## next_steps
 
 - P0: External ChatGPT M6 Review。
 - P1: M7 Writer↔Reviewer orchestration；**NOT AUTHORIZED**。
+
+## review_focus
+
+- 尝试 malformed/oversized report、PASS+MAJOR、tiny context 与 retry 后 draft truncation。
+- 尝试 draft/report external race、transaction fault/rollback、READY stale/missing report、symlink path。
+- 验证 Reviewer 无写工具、不调用 Writer/confirm、不泄漏正文/context/secret，不存在 M7 loop。
+
+## critical_files
+
+- `agents/review_report.py`, `agents/reviewer.py`, `agents/prompts/reviewer_system.md`
+- `core/review_context.py`, `core/review_preflight.py`, `core/review.py`, `core/review_workflow.py`
+- `core/chapter.py`, `core/history.py`, `core/knowledge.py`
+- `adapters/cli/m6.py`, `adapters/cli/main.py`
+- `tests/test_m6_*.py`, `tests/mock_server.py`
+
+## recent_changes
+
+- 新增 M6 Reviewer 全链路与严格报告/预算/事务/CLI/Doctor/E2E。
+- 强化 history 跨进程串行、guarded rollback 与 AI READY confirm exact PASS artifact 门槛。
+- 修正 Windows localhost SSE interruption fixture 的可靠 EOF，恢复完整回归可终止性。
+- 更新 README、M6/M7 readiness、Agent/ChatGPT memory 与 external review handoff；M7 未启动。

@@ -1,14 +1,15 @@
-# M6 Reviewer Readiness
+# M6 Reviewer Readiness — Fulfilled
 
-- M5 Writer output is always `origin=ai` and `status=draft`.
-- Generation provenance records state, mode, model, context hash, and TaskCard hash.
-- `AIChapterDraftService` owns revision-protected canonical AI draft persistence.
-- Chief produces a validated `WritingTaskCard`; Writer produces prose only.
-- `ContextBudgetPlan` is mandatory before every Writer call and never injects the full novel by default.
-- Interrupted generation stays in the non-canonical `drafts/.generation/` workspace and supports cross-process resume.
-- Rewrite and continue use raw-byte revision guards plus the existing Snapshot/history undo mechanism.
-- Chapter-scoped cross-process locks serialize application confirm/finalize/partial preparation critical sections.
-- A future Reviewer owns only `DRAFT → REVIEWING → READY`; Reviewer PASS is not user confirmation.
-- Confirm boundary structurally accepts only AI `ready` and preserves `origin=ai`; M5 exposes no READY transition, so Writer drafts remain blocked.
+This M5-to-M6 handoff is now fulfilled by the runnable M6 Reviewer workflow.
 
-**M6 NOT AUTHORIZED.** No runnable Reviewer workflow is present.
+- `review <project> [chapter]` builds strict bounded context and runs a tool-free Reviewer.
+- `ReviewReport` is strict JSON with fixed verdict, severity and category enums; malformed output receives at most one schema-only repair.
+- Deterministic preflight findings merge with model issues and cannot be erased by a model PASS.
+- `ReviewService` binds the report to the exact canonical draft revision and owns `draft -> ready|draft`, artifact persistence, history and rollback.
+- Architecture B keeps canonical status `draft` during the network call; REVIEWING is process-local, no pending sidecar is persisted, and `review recover` returns `NO_PENDING_REVIEW`.
+- Reviewer operations preserve prose body bytes. Draft/report races fail closed and preserve external bytes.
+- PASS only produces READY. A current strict PASS artifact is required before the user can explicitly run `chapter confirm`.
+
+Current status: M6 implementation complete; awaiting External ChatGPT M6 review.
+
+**M7 NOT AUTHORIZED.** No automatic Writer rewrite, review loop, confirmation, outline/knowledge mutation, or post-confirm memory workflow exists.

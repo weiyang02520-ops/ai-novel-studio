@@ -26,3 +26,8 @@
 请重点尝试 malformed report、tiny context、retry 后 draft truncation、draft/report races、symlink path、transaction fault、READY stale report，以及任何可能自动调用 Writer/confirm 的越权路径。
 
 M7 自动 rewrite/continue、多轮 review、自动 confirm、post-confirm memory 均不在本次实现中。
+
+## Verification
+
+- `python -m pytest tests/ -v`: **621 passed, 5 skipped, 0 failed**; collected = 626。
+- Real external Reviewer: **UNVERIFIED_MISSING_CONFIG**（非阻塞）。
