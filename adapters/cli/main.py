@@ -306,6 +306,27 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--severity", choices=("BLOCKER", "MAJOR", "MINOR", "INFO"))
     review.add_argument("--category")
 
+    # ── M7 autonomous creation orchestration ──
+    # Parser-only wiring lives here while the workflow remains a Core concern.
+    from adapters.cli.m7 import validate_max_rounds
+
+    compose = sub.add_parser("compose", help="编排 Chief、Writer 与 Reviewer 完成章节草稿")
+    compose.add_argument("project_id")
+    compose.add_argument("chapter", type=int, nargs="?")
+    compose.add_argument("--instruction", default="")
+    compose.add_argument("--title", default="")
+    compose.add_argument("--target-chars", type=int, default=4000)
+    compose.add_argument("--character", action="append", default=[])
+    compose.add_argument("--world", action="append", default=[])
+    compose.add_argument("--review-instruction", default="")
+    compose.add_argument("--max-rounds", type=validate_max_rounds, default=None)
+    compose_mode = compose.add_mutually_exclusive_group()
+    compose_mode.add_argument("--resume", action="store_true")
+    compose_mode.add_argument("--status", action="store_true")
+    compose_mode.add_argument("--reset-run", action="store_true")
+    compose.add_argument("--no-stream", action="store_true")
+    compose.add_argument("--show-rounds", action="store_true")
+
     return p
 
 
