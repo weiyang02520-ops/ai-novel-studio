@@ -30,6 +30,7 @@ class WriterRequest:
     existing_text: str = ""
     additional_instruction: str = ""
     base_revision: str = "ABSENT"
+    provenance_task_hash: str = ""
 
 
 @dataclasses.dataclass
@@ -58,6 +59,7 @@ class WriterRunner:
         rendered_context: str,
         on_text_delta: Callable[[str], None] | None = None,
         workspace: GenerationWorkspace | None = None,
+        stream: bool = True,
     ) -> WriterResult:
         task_json = json.dumps(req.task_card.to_dict(), ensure_ascii=False, sort_keys=True)
         mode_instruction = {
@@ -80,6 +82,28 @@ class WriterRunner:
         usage = None
         state = "complete"
         interrupted = ""
+        if not stream:
+            response = self.provider.chat(messages, tools=None)
+            if response.tool_calls:
+                raise WriterError("WRITER_PROTOCOL_ERROR", "Writer emitted a tool call")
+            text = response.text or ""
+            if not text:
+                raise WriterError("EMPTY_WRITER_OUTPUT", "no prose")
+            if len(text) > HARD_MAX_GENERATED_CHARS:
+                text = text[:HARD_MAX_GENERATED_CHARS]
+                state, finish = "truncated", "hard_limit"
+            else:
+                finish = response.finish_reason or "unknown"
+                state = "truncated" if finish == "length" else "complete"
+            if workspace:
+                workspace.append(text)
+            return WriterResult(
+                text=text, model=response.model or getattr(self.provider.config, "model", ""),
+                usage=response.usage, finish_reason=finish, generation_state=state,
+                chars=len(text), estimated_tokens=BaseProvider.estimate_tokens(text),
+                context_hash=req.context_plan.context_hash,
+                task_hash=req.provenance_task_hash or req.task_card.task_hash,
+            )
         try:
             for chunk in self.provider.stream_chat(messages, tools=None):
                 if chunk.kind == "text" and chunk.text:
@@ -133,6 +157,6 @@ class WriterRunner:
             chars=len(text),
             estimated_tokens=BaseProvider.estimate_tokens(text),
             context_hash=req.context_plan.context_hash,
-            task_hash=req.task_card.task_hash,
+            task_hash=req.provenance_task_hash or req.task_card.task_hash,
             interrupted_error=interrupted,
         )

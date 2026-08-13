@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from adapters.cli.main import build_parser
-from adapters.cli.m5 import _public_task_card
+from adapters.cli.m5 import _public_task_card, cmd_context
 from agents.task_card import TaskCardError, WritingTaskCard, parse_task_card
-from agents.planner import ChiefPlanningService
+from agents.planner import ChiefPlanningService, build_planner_context_plan
 from agents.writer import WriterError, WriterRequest, WriterRunner
 from core.ai_draft import AIChapterDraftService, AIDraftError
 from core.chapter import confirm_draft, draft_path, parse_frontmatter, write_draft
@@ -22,7 +22,7 @@ from core.history import prepare_snapshot
 from core.knowledge import doctor
 from core.mutation import ABSENT, file_revision
 from core.project import create_project
-from core.relevance import RelevanceError, resolve_relevant_entities
+from core.relevance import build_relevance_source, RelevanceError, resolve_relevant_entities
 from core.storage import DataIntegrityError, ProjectStore, atomic_write_text
 from core.write_workflow import WriteRequest, WriteWorkflow, WriteWorkflowError
 from llm.provider import BaseProvider, CONTEXT_TOO_LONG, ProviderError, STREAM_INTERRUPTED
@@ -60,6 +60,8 @@ class FakeProvider(BaseProvider):
     def chat(self, messages, *, temperature=None, tools=None):
         self.chat_calls.append(messages)
         value = self.chats.pop(0)
+        if isinstance(value, BaseException):
+            raise value
         return value
 
     def stream_chat(self, messages, *, temperature=None, tools=None):
@@ -85,9 +87,9 @@ def settings():
                                     "max_recent_text_chars": 3000})
 
 
-def workflow(project, streams, chats=None, max_context=16000):
+def workflow(project, streams, chats=None, max_context=16000, writer_chats=None):
     chief = FakeProvider(chats=chats or [planner_result()], model="chief")
-    writer = FakeProvider(streams=streams, max_context=max_context, model="writer")
+    writer = FakeProvider(chats=writer_chats, streams=streams, max_context=max_context, model="writer")
     return WriteWorkflow(chief_provider=chief, writer_provider=writer,
                          chief_prompt="JSON only", writer_prompt="prose only", settings=settings()), chief, writer
 
@@ -115,6 +117,40 @@ def test_planner_repairs_then_falls_back_without_persisting_raw_output():
         chapter=1, target_chars=1000, title="", instruction="写雨", project_data="facts")
     assert fallback.card.source == "fallback"
     assert "sensitive" not in fallback.card.chief_brief
+
+
+def test_planner_context_is_strictly_bounded_for_huge_sources():
+    provider = FakeProvider(chats=[planner_result()], max_context=7000, model="chief")
+    items = [
+        ContextItem("outline/chapters/ch0001.md", "PLANNER_CHAPTER_OUTLINE", 120,
+                    "章" * 300_000, 300_000, 300_000),
+        ContextItem("rules/writing_rules.md", "PLANNER_RULES", 115,
+                    "规" * 300_000, 300_000, 300_000),
+        ContextItem("outline/volumes/vol001.md", "PLANNER_VOLUME_OUTLINE", 105,
+                    "卷" * 300_000, 300_000, 300_000),
+        ContextItem("outline/summary.md", "PLANNER_SUMMARY", 70,
+                    "总" * 300_000, 300_000, 300_000),
+    ]
+    result = ChiefPlanningService(provider, "planner system").plan(
+        chapter=1, target_chars=1000, title="", instruction="", project_items=items)
+    sent = BaseProvider.estimate_messages_tokens(provider.chat_calls[0])
+    assert sent + 2048 <= provider.config.max_context_tokens
+    assert result.context_plan.truncated_items
+    assert {x.type for x in result.context_plan.selected_items} >= {
+        "PLANNER_CHAPTER_OUTLINE", "PLANNER_RULES"}
+
+
+def test_planner_context_too_long_retries_once_then_json_parses():
+    provider = FakeProvider(chats=[ProviderError(CONTEXT_TOO_LONG, "too long"), planner_result()],
+                            max_context=8000, model="chief")
+    items = [ContextItem("outline/summary.md", "PLANNER_SUMMARY", 70,
+                         "长" * 20_000, 20_000, 20_000)]
+    result = ChiefPlanningService(provider, "planner system").plan(
+        chapter=1, target_chars=1000, title="", instruction="", project_items=items)
+    assert result.card.goal == "发现尸体"
+    assert len(provider.chat_calls) == 2
+    assert BaseProvider.estimate_messages_tokens(provider.chat_calls[1]) < \
+           BaseProvider.estimate_messages_tokens(provider.chat_calls[0])
 
 
 def test_relevance_auto_explicit_missing_and_ambiguous(project):
@@ -213,6 +249,35 @@ def test_writer_length_empty_tool_and_no_retry_after_text(project):
         WriterRunner(text_then_tool, "p").run(request, rendered_context="x")
 
 
+def test_writer_true_nonstream_uses_chat_and_writes_after_response(project):
+    response = ChatResult(text="完整正文。", model="writer-chat", usage=Usage(8, 4, 12),
+                          finish_reason="stop")
+    provider = FakeProvider(chats=[response], streams=[])
+    context = plan_context([], model_max_tokens=3000, reserve_output_tokens=500,
+                           safety_margin_tokens=100, fixed_prompt_tokens=10)
+    workspace = GenerationWorkspace(project, 1)
+    workspace.prepare({"mode": "new"})
+    result = WriterRunner(provider, "p").run(
+        WriterRequest(project, 1, "", card(), context, 1000, "new"),
+        rendered_context="x", workspace=workspace, stream=False)
+    assert result.text == workspace.text() == "完整正文。"
+    assert len(provider.chat_calls) == 1 and provider.stream_calls == []
+    assert result.usage.total_tokens == 12
+
+
+def test_writer_nonstream_tool_and_empty_are_hard_failures(project):
+    context = plan_context([], model_max_tokens=3000, reserve_output_tokens=500,
+                           safety_margin_tokens=100, fixed_prompt_tokens=10)
+    request = WriterRequest(project, 1, "", card(), context, 1000, "new")
+    tool_result = ChatResult(text="正文", tool_calls=[object()])
+    with pytest.raises(WriterError, match="WRITER_PROTOCOL_ERROR"):
+        WriterRunner(FakeProvider(chats=[tool_result]), "p").run(
+            request, rendered_context="x", stream=False)
+    with pytest.raises(WriterError, match="EMPTY_WRITER_OUTPUT"):
+        WriterRunner(FakeProvider(chats=[ChatResult(text="")]), "p").run(
+            request, rendered_context="x", stream=False)
+
+
 def test_ai_draft_create_provenance_history_undo_and_confirm_block(project):
     result = AIChapterDraftService(project).finalize(
         chapter=1, title="雨", body="山雨落下。", mode="new", generation_state="complete",
@@ -306,6 +371,19 @@ def test_ai_confirm_block_even_if_user_confirmed(project):
         confirm_draft(project, 1)
 
 
+def test_ai_ready_confirm_contract_preserves_ai_origin(project):
+    AIChapterDraftService(project).finalize(
+        chapter=1, title="", body="READY BODY", mode="new", generation_state="complete",
+        model="m", context_hash="c", task_hash="t", expected_revision=ABSENT)
+    path = draft_path(project, 1)
+    atomic_write_text(path, path.read_text(encoding="utf-8").replace("status: draft", "status: ready"))
+    confirmed = confirm_draft(project, 1)
+    assert confirmed.status == "confirmed" and confirmed.origin == "ai"
+    metadata, body = parse_frontmatter((project.dir / "chapters/ch0001.md").read_text(encoding="utf-8"))
+    assert metadata["origin"] == "ai" and body == "READY BODY"
+    assert project.current_chapter == 1
+
+
 def test_workflow_new_plan_context_stream_finalize(project):
     flow, chief, writer = workflow(project, [[ChatChunk(kind="text", text="山雨落下。"),
                                               ChatChunk(kind="finish", finish_reason="stop")]])
@@ -362,6 +440,47 @@ def test_workflow_interruption_keeps_partial_no_canonical(project):
     assert not draft_path(project, 1).exists()
 
 
+def test_partial_sidecar_redacts_prompt_context_and_resume_keeps_original_hash(project):
+    secret_instruction = "USER_SECRET_INSTRUCTION_123"
+    private_brief = "CHIEF_PRIVATE_BRIEF_456"
+    project_marker = "PROJECT_CONTEXT_MARKER_789"
+    atomic_write_text(project.dir / "characters/shen-yan.md", f"# 沈砚\n{project_marker}")
+    original = card(user_instruction=secret_instruction, chief_brief=private_brief)
+    chief_response = planner_result(json.dumps(original.to_dict(), ensure_ascii=False))
+    flow, _, _ = workflow(project, [[ChatChunk(kind="text", text="部分。"),
+                                      ProviderError(STREAM_INTERRUPTED, "gone")]],
+                          chats=[chief_response])
+    result = flow.run(WriteRequest(project, instruction=secret_instruction, target_chars=1000))
+    assert result.status == "interrupted"
+    workspace = GenerationWorkspace(project, 1)
+    sidecar_bytes = workspace.sidecar.read_text(encoding="utf-8")
+    assert secret_instruction not in sidecar_bytes
+    assert private_brief not in sidecar_bytes
+    assert project_marker not in sidecar_bytes
+    sidecar = workspace.metadata()
+    assert "task_card" not in sidecar and "resume_card" in sidecar
+    assert set(sidecar) == {"chapter", "mode", "title", "base_revision", "task_hash",
+                            "context_hash", "model", "resume_card", "created_at"}
+    assert "user_instruction" not in sidecar["resume_card"]
+    assert "chief_brief" not in sidecar["resume_card"]
+    original_hash = sidecar["task_hash"]
+    resume, _, _ = workflow(project, [[ChatChunk(kind="text", text="完成。"),
+                                       ChatChunk(kind="finish", finish_reason="stop")]], chats=[])
+    resume.run(WriteRequest(project, chapter=1, mode="resume"))
+    metadata, _ = parse_frontmatter(draft_path(project, 1).read_text(encoding="utf-8"))
+    assert metadata["task_hash"] == original_hash
+
+
+def test_workflow_true_nonstream_never_calls_writer_stream(project):
+    flow, _, writer = workflow(
+        project, [], writer_chats=[ChatResult(text="非流正文。", model="writer-chat",
+                                              usage=Usage(10, 5, 15), finish_reason="stop")])
+    result = flow.run(WriteRequest(project, target_chars=1000, stream=False))
+    assert result.status == "saved"
+    assert len(writer.chat_calls) == 1 and writer.stream_calls == []
+    assert parse_frontmatter(draft_path(project, 1).read_text(encoding="utf-8"))[1] == "非流正文。"
+
+
 def test_workflow_resume_merges_and_cleans(project):
     partial_flow, _, _ = workflow(project, [[ChatChunk(kind="text", text="山雨落下。"),
                                               ProviderError(STREAM_INTERRUPTED, "gone")]])
@@ -381,7 +500,7 @@ def test_workflow_resume_rejects_stale_canonical(project):
     workspace = GenerationWorkspace(project, 1)
     workspace.prepare({"mode": "continue", "title": "", "base_revision": initial.revision,
                        "task_hash": card().task_hash, "context_hash": "c", "model": "m",
-                       "task_card": card().to_dict()})
+                       "resume_card": card().resume_dict()})
     workspace.append("partial")
     atomic_write_text(draft_path(project, 1), draft_path(project, 1).read_text(encoding="utf-8") + "external")
     flow, _, writer = workflow(project, [])
@@ -431,6 +550,37 @@ def test_workflow_protects_manual_and_requires_plan(project):
     (project.dir / "outline/chapters/ch0001.md").unlink()
     with pytest.raises(WriteWorkflowError, match="INSUFFICIENT_WRITING_PLAN"):
         flow.run(WriteRequest(project))
+
+
+def test_shared_relevance_source_offline_online_parity(project):
+    atomic_write_text(project.dir / "outline/chapters/ch0001.md", "# 第一章\n沈砚查看回程契。")
+    atomic_write_text(project.dir / "world/return-contract.md", "# 回程契\n返程规则。")
+    synthetic = WritingTaskCard(1, "Dry-run context planning", 4000, source="synthetic")
+    source = build_relevance_source(project, 1, synthetic, "")
+    offline = resolve_relevant_entities(project, synthetic, source)
+    online = resolve_relevant_entities(project, synthetic, source)
+    assert offline == online
+    assert offline.characters == ["characters/shen-yan.md"]
+    assert offline.world == ["world/return-contract.md"]
+
+
+def test_context_plan_cli_auto_selects_entities_from_outline(project, tmp_path, monkeypatch, capsys):
+    atomic_write_text(project.dir / "outline/chapters/ch0001.md", "# 第一章\n沈砚查看回程契。")
+    atomic_write_text(project.dir / "world/return-contract.md", "# 回程契\n返程规则。")
+    fake_settings = SimpleNamespace(
+        context={"reserve_output_tokens": 1000, "max_recent_chapters": 5,
+                 "max_recent_text_chars": 3000},
+        model_for=lambda role: ModelConfig(provider="openai_compatible",
+                                            base_url="http://localhost/v1",
+                                            model="writer", max_context_tokens=16000))
+    monkeypatch.setattr("adapters.cli.m5.Settings.load", lambda _: fake_settings)
+    args = SimpleNamespace(project_id=project.id, data_dir=project.store.root,
+                           config_path=tmp_path / "unused.json", chapter=1, instruction="",
+                           character=[], world=[], json=False, show_text=False)
+    assert cmd_context(args) == 0
+    output = capsys.readouterr().out
+    assert "characters/shen-yan.md" in output
+    assert "world/return-contract.md" in output
 
 
 @pytest.mark.parametrize("mode", ["new", "rewrite", "continue"])

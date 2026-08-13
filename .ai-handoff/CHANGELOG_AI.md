@@ -274,3 +274,26 @@
 - `A  tests/test_m5_http_e2e.py`
 - `A  core/locks.py`
 
+
+## 2026-08-13 14:14 — Checkpoint
+
+摘要: update 1 files
+
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
+- ` M .ai-handoff/REVIEW_REQUEST.md`
+- ` M README.md`
+- ` M adapters/cli/m5.py`
+- ` M agents/planner.py`
+- ` M agents/task_card.py`
+- ` M agents/writer.py`
+- ` M core/chapter.py`
+- ` M core/context_budget.py`
+- ` M core/relevance.py`
+- ` M core/write_workflow.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M docs/context/CHATGPT_MEMORY.md`
+- ` M docs/context/M6_READINESS.md`
+- ` M tests/test_m5.py`
+- ` M tests/test_m5_http_e2e.py`
+

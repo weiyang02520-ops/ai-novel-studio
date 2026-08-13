@@ -107,12 +107,17 @@ ai-novel-studio/
 - Writer 只输出正文且 AgentDef 工具列表为空；workflow 独占 canonical draft persistence。
 - AI draft 固定 `origin=ai, status=draft`；M6 前不可 confirm，手动与 AI draft 路径保持分离。
 - 每次 Writer 调用前必须构建 ContextBudget；默认永不自动注入全书正文。
+- Chief Planner 同样必须按 chief model window 构建 bounded context；TaskCard JSON reserve 独立，首次无结果 `CONTEXT_TOO_LONG` 只缩到约 0.65 后重试一次，JSON repair 另限一次且不重带小说 context。
 - Chief TaskCard 使用严格 JSON schema、一次 repair 与确定性 fallback；TaskCard/hash 不含 secret。
 - 生成中内容只追加到 `drafts/.generation/`；完整或 length-truncated 后才 finalize canonical。
 - interruption 保留非 canonical partial；空 partial 清理；resume 跨进程复用 TaskCard 并重建当前 context。
+- partial sidecar 只保存恢复 allowlist 与 redacted `resume_card`，绝不保存 user instruction、Chief brief、prompt 或 full context；canonical provenance 保留原 task hash。
 - rewrite/continue/resume 使用原始 bytes revision guard + Snapshot；外部/用户 draft 修改在 stale race 中获胜。
 - canonical AI finalize、manual confirm 与 partial prepare 使用同一章级跨进程文件锁，封闭本应用并发 TOCTOU。
 - Writer 首次无正文 `CONTEXT_TOO_LONG` 只缩 budget 重试一次；已有正文后绝不从头重试。
+- `write --no-stream` 必须调用 Provider `chat()`，不是仅关闭 stdout delta；Provider 返回前失败不留下有效 partial。
+- relevance source 由章纲、卷纲、结构化 TaskCard 与 instruction 共用构造，online workflow 与 offline `context plan` 保持一致。
+- confirm 按 origin 分支：manual 允许 draft/user_confirmed；AI 只允许 ready，确认后保留 AI origin。M5 不提供 READY transition。
 - Reviewer 仍属未来 M6：`DRAFT → REVIEWING → READY`，M6 NOT AUTHORIZED。
 
 ## M2 Provider 稳定规则(稳定)

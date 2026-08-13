@@ -42,6 +42,10 @@ class WritingTaskCard:
             if not isinstance(value, list) or not all(isinstance(x, str) for x in value): raise TaskCardError(f"{name} 必须是 list[str]")
 
     def to_dict(self) -> dict[str, Any]: return dataclasses.asdict(self)
+    def resume_dict(self) -> dict[str, Any]:
+        """Minimum cross-process resume shape; excludes prompt-like fields."""
+        excluded = {"user_instruction", "chief_brief"}
+        return {key: value for key, value in self.to_dict().items() if key not in excluded}
     @property
     def task_hash(self) -> str:
         return hashlib.sha256(json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True,

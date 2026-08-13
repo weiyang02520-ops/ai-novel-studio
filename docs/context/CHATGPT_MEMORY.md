@@ -49,3 +49,6 @@ Knowledge Doctor 只读且不评分。FACT_SOURCE 高于 DERIVED_MEMORY。Contex
 
 ## [DESIGN_DECISION] M5 Writer
 M5 Writer generates revision-protected AI drafts from bounded project context; Reviewer remains M6.
+
+## [DESIGN_DECISION] M5 Final Closeout
+Chief planning and Writer input are independently bounded; partial resume metadata is prompt-redacted; `--no-stream` uses a true non-stream Provider call. Confirm structurally permits AI only at READY while preserving AI origin, but M5 exposes no READY transition and Reviewer remains unauthorized M6 work.

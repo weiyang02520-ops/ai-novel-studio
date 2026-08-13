@@ -15,7 +15,7 @@ from core.context import collect_project_context
 from core.context_budget import ContextBudgetError, plan_context, render_writer_context
 from core.generation import GenerationWorkspace, list_partials
 from core.mutation import file_revision
-from core.relevance import RelevanceError, resolve_relevant_entities
+from core.relevance import build_relevance_source, RelevanceError, resolve_relevant_entities
 from core.storage import DataIntegrityError, ProjectStore, StorageError
 from core.write_workflow import WriteRequest, WriteWorkflow, WriteWorkflowError
 from llm.factory import create_provider
@@ -147,6 +147,7 @@ def cmd_write(args) -> int:
             world=args.world or [],
             mode=mode,
             plan_only=args.plan_only,
+            stream=not args.no_stream,
         )
         try:
             result = workflow.run(
@@ -171,7 +172,7 @@ def cmd_write(args) -> int:
 
     duration_ms = (time.monotonic() - started) * 1000
     _record_usages(args, chief_cfg, result.chief_usages, stream=False, duration_ms=duration_ms)
-    _record_usages(args, writer_cfg, result.writer_usages, stream=True, duration_ms=duration_ms)
+    _record_usages(args, writer_cfg, result.writer_usages, stream=not args.no_stream, duration_ms=duration_ms)
     if not args.no_stream and result.writer_result:
         print()
     if args.show_plan or args.plan_only:
@@ -215,9 +216,9 @@ def cmd_context(args) -> int:
             user_instruction=args.instruction or "",
             source="synthetic",
         )
+        relevance_source = build_relevance_source(project, chapter, card, args.instruction or "")
         entities = resolve_relevant_entities(
-            project, card, args.instruction or "", characters=args.character, world=args.world
-        )
+            project, card, relevance_source, characters=args.character, world=args.world)
         items = collect_project_context(
             project,
             current_volume=int(project.metadata.get("current_volume", 1)),

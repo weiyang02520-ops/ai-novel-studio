@@ -8,7 +8,7 @@
 
 ## phase
 
-**M5 WRITER SUPER BATCH implementation complete. Awaiting External ChatGPT M5 review.**
+**M5 FINAL CLOSEOUT complete. Awaiting External ChatGPT final M5 review.**
 
 M6 NOT AUTHORIZED.
 
@@ -28,10 +28,14 @@ M6 NOT AUTHORIZED.
 - Final hardening counts rendered context wrappers strictly, keeps newest recent chapters first, refuses partial overwrite, and budgets continuation tails.
 - Per-chapter cross-process locks close application-level confirm/finalize/partial-prepare races; stale external bytes still win.
 - Stream protocol tool calls are hard failures even after text; public TaskCard output excludes opaque Chief brief.
+- Chief Planner now has a strict, prioritized context plan using the Chief model window and one independent 0.65 overflow retry.
+- AI confirm branches by origin: manual draft/user_confirmed, AI ready only, with confirmed origin preserved; no READY transition exists in M5.
+- Partial sidecar stores a redacted resume card and original task hash, never instruction/Chief brief/full context.
+- `--no-stream` performs a true non-stream Provider `chat()` call; offline context planning shares workflow relevance evidence.
 
 ## verified
 
-- Exhaustive parallel pytest partition plus final localhost matrix: **521 passed, 5 skipped, 0 failed**; collected = 526。
+- `python -m pytest tests/ -v`: **530 passed, 5 skipped, 0 failed**; collected = 535。
 - M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
 - Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
 - Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。
@@ -41,6 +45,7 @@ M6 NOT AUTHORIZED.
 
 - `agents/task_card.py`, `agents/planner.py`, `agents/writer.py`: Chief-to-Writer contract and prose runner。
 - `core/relevance.py`, `core/context_budget.py`: deterministic source selection and bounded Writer input。
+- `agents/planner.py`: independently bounded Chief planning context, overflow retry, then separate JSON repair。
 - `core/generation.py`: safe non-canonical partial workspace and exact-overlap merge。
 - `core/ai_draft.py`: canonical AI draft transaction boundary。
 - `core/write_workflow.py`: target validation → plan → context → stream → finalize orchestration。
@@ -51,6 +56,7 @@ M6 NOT AUTHORIZED.
 
 - Writer writes prose only; workflow owns canonical persistence。
 - AI drafts cannot confirm before READY; M5 never runs Reviewer transitions。
+- AI ready confirm is a state-machine contract only; M5 exposes no command or workflow that produces READY。
 - Full novel is never automatically injected; ContextBudget is mandatory。
 - Interrupted generation uses partial workspace; partial is never canonical or history-bearing。
 - Rewrite/continue/resume use revision guard + Snapshot; external draft edits win stale races。
@@ -63,5 +69,5 @@ M6 NOT AUTHORIZED.
 
 ## next
 
-- P0: External ChatGPT M5 Review。
+- P0: External ChatGPT final M5 Review。
 - P1: M6 Reviewer SUPER BATCH；**NOT AUTHORIZED**。

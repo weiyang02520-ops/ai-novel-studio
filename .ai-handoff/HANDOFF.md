@@ -10,7 +10,7 @@
 
 ## 2. 当前阶段
 
-**M5 WRITER SUPER BATCH implementation complete. Awaiting External ChatGPT M5 review.**
+**M5 FINAL CLOSEOUT complete. Awaiting External ChatGPT final M5 review.**
 
 M6 NOT AUTHORIZED.
 
@@ -26,43 +26,34 @@ M6 NOT AUTHORIZED.
 - Final hardening counts rendered context wrappers strictly, keeps newest recent chapters first, refuses partial overwrite, and budgets continuation tails.
 - Per-chapter cross-process locks close application-level confirm/finalize/partial-prepare races; stale external bytes still win.
 - Stream protocol tool calls are hard failures even after text; public TaskCard output excludes opaque Chief brief.
+- Chief Planner now has a strict, prioritized context plan using the Chief model window and one independent 0.65 overflow retry.
+- AI confirm branches by origin: manual draft/user_confirmed, AI ready only, with confirmed origin preserved; no READY transition exists in M5.
+- Partial sidecar stores a redacted resume card and original task hash, never instruction/Chief brief/full context.
+- `--no-stream` performs a true non-stream Provider `chat()` call; offline context planning shares workflow relevance evidence.
 
 ## 4. 本轮修改文件
 
-- `M  .ai-handoff/CHANGELOG_AI.md`
-- `M  .ai-handoff/HANDOFF.md`
-- `M  .ai-handoff/NEXT_TASKS.md`
-- `MM .ai-handoff/PROJECT_STATE.md`
+- `M .ai-handoff/NEXT_TASKS.md`
+- ` M .ai-handoff/PROJECT_STATE.md`
 - ` M .ai-handoff/REVIEW_REQUEST.md`
-- `M  .ai-handoff/STATUS.md`
-- `M  README.md`
-- `AM adapters/cli/m5.py`
-- `M  adapters/cli/main.py`
-- `M  agents/definitions.py`
-- `A  agents/planner.py`
-- `A  agents/prompts/chief_writer_plan.md`
-- `A  agents/prompts/writer_system.md`
-- `A  agents/task_card.py`
-- `AM agents/writer.py`
-- `AM core/ai_draft.py`
-- `MM core/chapter.py`
-- ` M core/context.py`
-- `AM core/context_budget.py`
-- `AM core/generation.py`
-- `M  core/knowledge.py`
-- `A  core/relevance.py`
-- `AM core/write_workflow.py`
-- `MM docs/context/AGENT_MEMORY.md`
-- `M  docs/context/CHATGPT_MEMORY.md`
-- `M  docs/context/M5_READINESS.md`
-- `AM docs/context/M6_READINESS.md`
-- `AM tests/test_m5.py`
-- `A  tests/test_m5_http_e2e.py`
-- …等共 31 个变更
+- ` M README.md`
+- ` M adapters/cli/m5.py`
+- ` M agents/planner.py`
+- ` M agents/task_card.py`
+- ` M agents/writer.py`
+- ` M core/chapter.py`
+- ` M core/context_budget.py`
+- ` M core/relevance.py`
+- ` M core/write_workflow.py`
+- ` M docs/context/AGENT_MEMORY.md`
+- ` M docs/context/CHATGPT_MEMORY.md`
+- ` M docs/context/M6_READINESS.md`
+- ` M tests/test_m5.py`
+- ` M tests/test_m5_http_e2e.py`
 
 ## 5. 已验证结果
 
-- Exhaustive parallel pytest partition plus final localhost matrix: **521 passed, 5 skipped, 0 failed**; collected = 526。
+- `python -m pytest tests/ -v`: **530 passed, 5 skipped, 0 failed**; collected = 535。
 - M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
 - Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
 - Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。
@@ -76,6 +67,7 @@ M6 NOT AUTHORIZED.
 
 - `agents/task_card.py`, `agents/planner.py`, `agents/writer.py`: Chief-to-Writer contract and prose runner。
 - `core/relevance.py`, `core/context_budget.py`: deterministic source selection and bounded Writer input。
+- `agents/planner.py`: independently bounded Chief planning context, overflow retry, then separate JSON repair。
 - `core/generation.py`: safe non-canonical partial workspace and exact-overlap merge。
 - `core/ai_draft.py`: canonical AI draft transaction boundary。
 - `core/write_workflow.py`: target validation → plan → context → stream → finalize orchestration。
@@ -102,11 +94,11 @@ M6 NOT AUTHORIZED.
 ## 12. Git 信息
 
 - Branch: main
-- checkpoint_base_commit: 85940f4ad268 ai-checkpoint: add 3 new files
+- checkpoint_base_commit: b8dad3485b0e ai-checkpoint: update 13 files
   (checkpoint 开始前的工作区 HEAD; 最新 checkpoint commit 以 GitHub 仓库 HEAD 为准)
 - GitHub 仓库可见性: public(真实查询; 无法获取时显示 unknown)
-- 最近 commit(本文件生成时): 85940f4 2026-08-12 19:33:58 +0800
-- 时间: 2026-08-12 20:47
+- 最近 commit(本文件生成时): b8dad34 2026-08-12 20:56:16 +0800
+- 时间: 2026-08-13 14:14
 
 ## 13. Critical Files
 

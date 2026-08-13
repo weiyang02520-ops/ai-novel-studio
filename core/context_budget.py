@@ -9,6 +9,9 @@ from .context import ContextItem
 
 SAFETY_MARGIN_TOKENS = 1024
 PRIORITY = {
+    "PLANNER_CHAPTER_OUTLINE": 120, "PLANNER_RULES": 115,
+    "PLANNER_VOLUME_OUTLINE": 105, "PLANNER_RECENT_TAIL": 90,
+    "PLANNER_SUMMARY": 70, "PLANNER_RECENT_METADATA": 60,
     "CHAPTER_OUTLINE": 110, "CONTINUATION_TAIL": 108, "RULES": 105,
     "CHARACTER": 100, "WORLD": 100, "RECENT_CHAPTER": 90,
     "VOLUME_OUTLINE": 80, "OUTLINE_SUMMARY": 60, "CURRENT_DRAFT": 50,
@@ -115,7 +118,8 @@ def plan_context(items: list[ContextItem], *, model_max_tokens: int,
     dropped: list[PlannedContextItem] = []
     truncated: list[PlannedContextItem] = []
     handled: set[str] = set()
-    critical = [item for item in ordered if item.type in {"CHAPTER_OUTLINE", "RULES"}]
+    critical = [item for item in ordered if item.type in {
+        "CHAPTER_OUTLINE", "RULES", "PLANNER_CHAPTER_OUTLINE", "PLANNER_RULES"}]
     critical_full = [_planned(item, item.text, "KEEP") for item in critical]
     if critical and _render_tokens(critical_full) > budget:
         for index, item in enumerate(critical):

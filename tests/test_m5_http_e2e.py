@@ -48,15 +48,12 @@ def test_m5_subprocess_chief_then_writer_sse(server, tmp_path):
         "content": json.dumps(task, ensure_ascii=False)}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
     }))
-    server.stream_mode = "full"
-    server.stream_chunks = [
-        '{"choices":[{"delta":{"content":"山雨刚停。"}}]}',
-        '{"choices":[{"delta":{"content":"沈砚站在停生院门前。"}}]}',
-        '{"choices":[{"delta":{"content":"第七具尸体仍没有名字。"}}]}',
-        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
-        '{"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":20,"total_tokens":70}}',
-        "[DONE]",
-    ]
+    server.responses.append((200, {
+        "model": "writer-local", "choices": [{"message": {"role": "assistant",
+        "content": "山雨刚停。沈砚站在停生院门前。第七具尸体仍没有名字。"},
+        "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70},
+    }))
     config = tmp_path / "settings.json"
     config.write_text(json.dumps({
         "default_model": {"provider": "openai_compatible", "base_url": server.base_url,
@@ -86,6 +83,7 @@ def test_m5_subprocess_chief_then_writer_sse(server, tmp_path):
     assert list_history(project)[0]["operation"] == "ai.draft.create"
     assert len(server.requests) == 2
     writer_request = server.requests[1]["body_json"]
+    assert writer_request.get("stream") is not True
     prompt = writer_request["messages"][1]["content"]
     for expected in ("TASK_CARD", "rules/writing_rules.md", "outline/chapters/ch0002.md",
                      "characters/shen-yan.md", "world/contract.md", "chapters/ch0001.md"):

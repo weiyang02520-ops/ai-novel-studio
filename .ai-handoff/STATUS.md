@@ -1,20 +1,20 @@
 # 项目状态
 
-> 最后更新: 2026-08-12 20:47 (自动生成, 来源: PROJECT_STATE.md)
+> 最后更新: 2026-08-13 14:14 (自动生成, 来源: PROJECT_STATE.md)
 
 ## 当前阶段
 
-**M5 WRITER SUPER BATCH implementation complete. Awaiting External ChatGPT M5 review.**
+**M5 FINAL CLOSEOUT complete. Awaiting External ChatGPT final M5 review.**
 
 M6 NOT AUTHORIZED.
 
 ## 本轮变更
 
-**update 13 files**(新增 1 / 修改 13 / 删除 0)
+**update 1 files**(新增 0 / 修改 1 / 删除 0)
 
 ## 已验证内容
 
-- Exhaustive parallel pytest partition plus final localhost matrix: **521 passed, 5 skipped, 0 failed**; collected = 526。
+- `python -m pytest tests/ -v`: **530 passed, 5 skipped, 0 failed**; collected = 535。
 - M5 unit/integration suite covers TaskCard, relevance, budget, stream, partial/resume, races/protection, DraftService, workflow and CLI parser.
 - Local HTTP E2E: subprocess NEW plus length, rewrite/undo, continue/undo, interrupt/resume, stale race and manual 0-request matrix PASS。
 - Existing M0-M4 provider、chapter/confirm/history、Chief 与 knowledge regressions PASS。

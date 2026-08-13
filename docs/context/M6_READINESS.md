@@ -9,6 +9,6 @@
 - Rewrite and continue use raw-byte revision guards plus the existing Snapshot/history undo mechanism.
 - Chapter-scoped cross-process locks serialize application confirm/finalize/partial preparation critical sections.
 - A future Reviewer owns only `DRAFT → REVIEWING → READY`; Reviewer PASS is not user confirmation.
-- Current confirm guard rejects AI drafts before READY.
+- Confirm boundary structurally accepts only AI `ready` and preserves `origin=ai`; M5 exposes no READY transition, so Writer drafts remain blocked.
 
 **M6 NOT AUTHORIZED.** No runnable Reviewer workflow is present.

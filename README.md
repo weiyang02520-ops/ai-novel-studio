@@ -199,9 +199,11 @@ python -m adapters.cli write my-novel 2 --resume
 python -m adapters.cli undo-last-change my-novel
 ```
 
-`--show-plan` 展示 Chief TaskCard；`--plan-only` 只规划、不写项目；`--show-context` 只列 context manifest；`--no-stream` 等完整正文后再显示结果。Writer 正文生成中只追加到 `drafts/.generation/`，成功后才通过 revision guard + Snapshot 原子落入 canonical draft。
+`--show-plan` 展示 Chief TaskCard；`--plan-only` 只规划、不写项目；`--show-context` 只列 context manifest；`--no-stream` 会真正调用 Provider 的非流式 `chat()`，完整返回后才落入 partial/finalize。默认流式正文只追加到 `drafts/.generation/`，成功后才通过 revision guard + Snapshot 原子落入 canonical draft。
 
-M5 的 AI draft 不能直接 `chapter confirm`。它必须等待 M6 Reviewer 将状态推进到 READY；手动草稿仍保持原有确认流程。
+Chief Planner 与 Writer 都受模型窗口预算约束：Planner 使用较小的 JSON 输出预留，并在首次 `CONTEXT_TOO_LONG` 时把资料缩到约 65% 后只重试一次。partial sidecar 仅保存恢复所需的 redacted TaskCard，不保存用户 instruction、Chief brief 或项目全文。
+
+M5 Writer 生成的 AI draft 不能直接 `chapter confirm`。确认边界已按 origin 准备好：manual 的 draft/user_confirmed 可确认，AI 只有 ready 可确认且确认后保持 `origin=ai`；但 M5 不提供 READY 转换，仍必须等待尚未授权的 M6 Reviewer。手动草稿保持原有确认流程。
 
 ## 数据在哪里
 

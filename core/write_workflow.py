@@ -14,7 +14,7 @@ from core.context import ContextItem, collect_project_context, collect_recent_ch
 from core.context_budget import ContextBudgetPlan, plan_context, render_writer_context
 from core.generation import GenerationWorkspace, merge_continuation
 from core.mutation import ABSENT, file_revision
-from core.relevance import resolve_relevant_entities
+from core.relevance import build_relevance_source, resolve_relevant_entities
 from llm.provider import BaseProvider, CONTEXT_TOO_LONG, ProviderError
 from llm.types import Usage
 
@@ -36,6 +36,7 @@ class WriteRequest:
     world: list[str] = dataclasses.field(default_factory=list)
     mode: str = "new"
     plan_only: bool = False
+    stream: bool = True
 
 
 @dataclasses.dataclass
@@ -61,43 +62,31 @@ def _read(project, rel: str) -> str:
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
-def _planner_data(project, chapter: int, instruction: str) -> str:
+def _planner_items(project, chapter: int) -> list[ContextItem]:
     volume = int(project.metadata.get("current_volume", 1))
-    parts = [
-        "[PROJECT_METADATA]\n"
-        + json.dumps(
-            {
-                "id": project.id,
-                "name": project.name,
-                "genre": project.genre,
-                "current_volume": volume,
-                "current_chapter": project.current_chapter,
-                "target_chapter": chapter,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-    ]
-    for rel in (
-        "outline/summary.md",
-        f"outline/volumes/vol{volume:03d}.md",
-        f"outline/chapters/ch{chapter:04d}.md",
-        "rules/writing_rules.md",
+    items: list[ContextItem] = []
+    for rel, typ, priority in (
+        (f"outline/chapters/ch{chapter:04d}.md", "PLANNER_CHAPTER_OUTLINE", 120),
+        ("rules/writing_rules.md", "PLANNER_RULES", 115),
+        (f"outline/volumes/vol{volume:03d}.md", "PLANNER_VOLUME_OUTLINE", 105),
+        ("outline/summary.md", "PLANNER_SUMMARY", 70),
     ):
         text = _read(project, rel)
         if text:
-            parts.append(f"[FACT_SOURCE:{rel}]\n{text}")
-    parts.append(
-        "[RECENT_CHAPTER_METADATA]\n"
-        + json.dumps(collect_recent_chapter_metadata(project)[-10:], ensure_ascii=False)
-    )
+            path = project.store.safe_path(project.id, rel)
+            items.append(ContextItem(rel, typ, priority, text, len(text),
+                                     BaseProvider.estimate_tokens(text), file_revision(path)))
+    metadata = json.dumps(collect_recent_chapter_metadata(project)[-10:], ensure_ascii=False)
+    items.append(ContextItem("recent-chapter-metadata", "PLANNER_RECENT_METADATA", 60,
+                             metadata, len(metadata), BaseProvider.estimate_tokens(metadata)))
     if project.current_chapter:
         recent = _read(project, f"chapters/ch{project.current_chapter:04d}.md")
         if recent:
-            parts.append("[RECENT_CHAPTER_TAIL]\n" + recent[-1500:])
-    if instruction:
-        parts.append("[USER_INSTRUCTION]\n" + instruction)
-    return "\n\n".join(parts)
+            tail = recent[-1500:]
+            items.append(ContextItem(
+                f"chapters/ch{project.current_chapter:04d}.tail", "PLANNER_RECENT_TAIL", 90,
+                tail, len(tail), BaseProvider.estimate_tokens(tail)))
+    return items
 
 
 def _load_item(project, rel: str, typ: str, priority: int) -> ContextItem:
@@ -124,7 +113,7 @@ class WriteWorkflow:
 
     def _context_plan(self, project, chapter: int, card: WritingTaskCard, req: WriteRequest,
                       existing: str, expected: str, continuation_text: str = "") -> ContextBudgetPlan:
-        source = _planner_data(project, chapter, req.instruction) + "\n" + card.chief_brief
+        source = build_relevance_source(project, chapter, card, req.instruction)
         entities = resolve_relevant_entities(
             project,
             card,
@@ -223,10 +212,13 @@ class WriteWorkflow:
                 raise WriteWorkflowError("PARTIAL_NOT_FOUND", "resume")
             try:
                 sidecar = workspace.metadata()
-                card = WritingTaskCard(**sidecar["task_card"])
+                card = WritingTaskCard(**sidecar["resume_card"], user_instruction="", chief_brief="")
             except (KeyError, TypeError, ValueError) as exc:
                 raise WriteWorkflowError("INVALID_PARTIAL_SIDECAR", str(exc)) from exc
             title = sidecar.get("title") or card.title
+            provenance_task_hash = sidecar.get("task_hash", "")
+            if not provenance_task_hash:
+                raise WriteWorkflowError("INVALID_PARTIAL_SIDECAR", "missing task_hash")
             resume_origin_mode = sidecar.get("mode", "")
             if resume_origin_mode not in {"new", "rewrite", "continue"}:
                 raise WriteWorkflowError("INVALID_PARTIAL_SIDECAR", "invalid original mode")
@@ -249,9 +241,10 @@ class WriteWorkflow:
                 target_chars=req.target_chars,
                 title=req.title,
                 instruction=req.instruction,
-                project_data=_planner_data(project, chapter, req.instruction),
+                project_items=_planner_items(project, chapter),
             )
             card = planned.card
+            provenance_task_hash = card.task_hash
             chief_usages.extend(planned.usages)
             title = req.title or card.title or f"第{chapter}章"
             partial = ""
@@ -278,10 +271,10 @@ class WriteWorkflow:
             "mode": mode,
             "title": title,
             "base_revision": expected,
-            "task_hash": card.task_hash,
+            "task_hash": provenance_task_hash,
             "context_hash": context_plan.context_hash,
             "model": self.writer_provider.config.model,
-            "task_card": card.to_dict(),
+            "resume_card": card.resume_dict(),
         }
         if mode != "resume":
             workspace.prepare(metadata)
@@ -300,6 +293,7 @@ class WriteWorkflow:
                            else partial if mode == "resume" else existing),
             additional_instruction=req.instruction,
             base_revision=expected,
+            provenance_task_hash=provenance_task_hash,
         )
         try:
             try:
@@ -308,6 +302,7 @@ class WriteWorkflow:
                     rendered_context=render_writer_context(context_plan),
                     on_text_delta=on_text_delta,
                     workspace=workspace,
+                    stream=req.stream,
                 )
             except ProviderError as exc:
                 if exc.code != CONTEXT_TOO_LONG or workspace.text():
@@ -320,6 +315,7 @@ class WriteWorkflow:
                     rendered_context=render_writer_context(context_plan),
                     on_text_delta=on_text_delta,
                     workspace=workspace,
+                    stream=req.stream,
                 )
         except BaseException:
             # An empty workspace is useless; a non-empty one is resumable.
@@ -359,7 +355,7 @@ class WriteWorkflow:
             generation_state=writer_result.generation_state,
             model=writer_result.model,
             context_hash=context_plan.context_hash,
-            task_hash=card.task_hash,
+            task_hash=provenance_task_hash,
             expected_revision=expected,
             characters=card.characters,
         )

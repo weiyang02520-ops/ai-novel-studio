@@ -353,12 +353,16 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
     status = meta["status"]
     if status == "confirmed":
         raise DataIntegrityError(f"{path.name}: 已确认章节不应位于草稿目录")
-    if status not in ("draft", "user_confirmed"):
-        raise DataIntegrityError(
-            f"{path.name}: 当前 status={status!r}, 仅 draft/user_confirmed 可确认")
-    if meta["origin"] == "ai" and status != "ready":
-        raise DataIntegrityError(
-            f"{path.name}: AI 章节必须先经 ready 才能确认(M1 仅 manual)")
+    origin = meta["origin"]
+    if origin == "manual":
+        if status not in ("draft", "user_confirmed"):
+            raise DataIntegrityError(
+                f"{path.name}: manual 草稿 status={status!r}, 仅 draft/user_confirmed 可确认")
+    elif origin == "ai":
+        if status != "ready":
+            raise DataIntegrityError(f"{path.name}: AI 章节必须先经 ready 才能确认")
+    else:  # parse_frontmatter normally rejects this; keep boundary explicit.
+        raise DataIntegrityError(f"{path.name}: 非法 origin={origin!r}")
 
     confirmed = confirmed_path(project, number)
     if confirmed.exists():
@@ -376,7 +380,7 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
     now = _now_iso()
     new_meta = dict(meta)
     new_meta["status"] = "confirmed"
-    new_meta["origin"] = "manual"
+    new_meta["origin"] = origin
     new_meta["updated_at"] = now
     confirmed_chapter = Chapter(new_meta, body, confirmed, is_draft=False)
 

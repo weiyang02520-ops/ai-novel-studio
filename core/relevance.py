@@ -1,5 +1,6 @@
 """Deterministic relevant character/world selection."""
 from __future__ import annotations
+import json
 from dataclasses import dataclass, field
 from .knowledge import first_h1, safe_markdown_files
 
@@ -10,6 +11,19 @@ class RelevantEntities:
     characters: list[str]
     world: list[str]
     reasons: dict[str, list[str]] = field(default_factory=dict)
+
+def build_relevance_source(project, chapter: int, card, instruction: str = "") -> str:
+    """Shared offline/online entity evidence; project text is DATA only."""
+    volume = int(project.metadata.get("current_volume", 1))
+    chunks = [json.dumps(card.to_dict(), ensure_ascii=False, sort_keys=True)]
+    for rel in (f"outline/chapters/ch{chapter:04d}.md",
+                f"outline/volumes/vol{volume:03d}.md"):
+        path = project.store.safe_path(project.id, rel)
+        if path.is_file():
+            chunks.append(path.read_text(encoding="utf-8"))
+    if instruction:
+        chunks.append(instruction)
+    return "\n\n".join(chunks)
 
 def _index(project, root):
     out = []

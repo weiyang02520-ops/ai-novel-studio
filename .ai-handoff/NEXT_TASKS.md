@@ -2,7 +2,7 @@
 
 ## P0
 
-- [ ] External ChatGPT M5 Review（M5 Writer implementation complete）。
+- [ ] External ChatGPT final M5 Review（M5 FINAL CLOSEOUT complete）。
 
 ## P1
 
