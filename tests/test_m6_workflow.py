@@ -134,6 +134,26 @@ def test_context_too_long_retries_once_with_point65_smaller_plan(project, tmp_pa
     assert artifact["context_hash"] == result.context_plan.context_hash
 
 
+def test_overflow_retry_rejects_external_draft_edit_before_second_provider(project, tmp_path):
+    path = draft_path(project, 1)
+    def edit_then_overflow(call):
+        if call == 1:
+            atomic_write_text(path, path.read_text(encoding="utf-8") + "external during overflow")
+    provider = FakeProvider([
+        ProviderError(CONTEXT_TOO_LONG, "too long"),
+        ChatResult(report(), model="reviewer"),
+    ], on_call=edit_then_overflow)
+    with pytest.raises(ReviewWorkflowError, match="STALE_REVIEW_DRAFT"):
+        workflow(provider, settings(tmp_path)).run(ReviewWorkflowRequest(project, 1))
+    assert len(provider.calls) == 1
+    assert path.read_text(encoding="utf-8").endswith("external during overflow")
+    assert parse_frontmatter(path.read_text(encoding="utf-8"))[0]["status"] == "draft"
+    assert not (project.dir / "review/ch0001.review.json").exists()
+    # The rejected second run must not remain active.
+    followup = FakeProvider([ChatResult(report(), model="reviewer")])
+    workflow(followup, settings(tmp_path)).run(ReviewWorkflowRequest(project, 1))
+
+
 @pytest.mark.parametrize("failure", ["double_overflow", "malformed", "provider", "interrupt"])
 def test_failures_abort_active_review_and_never_ready(project, tmp_path, failure):
     if failure == "double_overflow":

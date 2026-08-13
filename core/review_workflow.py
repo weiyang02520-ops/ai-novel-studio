@@ -95,6 +95,19 @@ class ReviewWorkflow:
         self.service_factory = service_factory
         self.runner = ReviewerRunner(reviewer_provider, reviewer_prompt)
 
+    def _begin_current(self, service: ReviewService, *, chapter: int,
+                       plan: ReviewContextPlan) -> ReviewRun:
+        run = service.begin(
+            chapter=chapter,
+            reviewer_model=getattr(self.provider.config, "model", ""),
+            context_hash=plan.context_hash,
+        )
+        if run.draft_revision != plan.draft_revision:
+            service.abort(run)
+            raise ReviewWorkflowError(
+                "STALE_REVIEW_DRAFT", "draft changed after review context was built")
+        return run
+
     def run(self, request: ReviewWorkflowRequest, *,
             on_stage: Callable[[str], None] | None = None) -> ReviewWorkflowResult:
         def stage(name: str) -> None:
@@ -130,14 +143,7 @@ class ReviewWorkflow:
         service = self.service_factory(project)
         run: ReviewRun | None = None
         try:
-            run = service.begin(
-                chapter=chapter,
-                reviewer_model=getattr(self.provider.config, "model", ""),
-                context_hash=plan.context_hash,
-            )
-            if run.draft_revision != plan.draft_revision:
-                raise ReviewWorkflowError(
-                    "STALE_REVIEW_DRAFT", "draft changed between context planning and review begin")
+            run = self._begin_current(service, chapter=chapter, plan=plan)
 
             stage("Reviewing")
             retried = False
@@ -157,11 +163,7 @@ class ReviewWorkflow:
                 if not preflight.can_review:
                     codes = ", ".join(x.code for x in preflight.blockers)
                     raise ReviewWorkflowError("REVIEW_PREFLIGHT_FAILED", codes)
-                run = service.begin(
-                    chapter=chapter,
-                    reviewer_model=getattr(self.provider.config, "model", ""),
-                    context_hash=plan.context_hash,
-                )
+                run = self._begin_current(service, chapter=chapter, plan=plan)
                 reviewer = self.runner.run(
                     ReviewRequest(project, chapter, run.draft_revision, plan,
                                   request.instruction, _draft_line_count(project, chapter)),
