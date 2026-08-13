@@ -178,7 +178,7 @@ class ReviewWorkflow:
             stage("Saving")
             persisted = service.finalize(run, report)
             run = None  # finalize always releases the active guard
-            usages = [reviewer.usage] if reviewer.usage else []
+            usages = list(reviewer.usages)
             return ReviewWorkflowResult(
                 "reviewed", chapter, plan, preflight, report, reviewer, persisted,
                 retried, usages,

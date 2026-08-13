@@ -14,6 +14,7 @@ from core.project import create_project
 from core.review import ReviewService
 from core.review_preflight import PreflightIssue, ReviewPreflightResult
 from core.storage import ProjectStore, atomic_write_text
+from core.write_workflow import WriteWorkflowError
 from llm.types import Usage
 
 
@@ -196,3 +197,55 @@ def test_interrupted_writer_returns_interrupted_without_review(tmp_path):
     result = flow.run(CreationRequest(p))
     assert result.final_state == "INTERRUPTED" and result.status == "WRITER_INTERRUPTED"
     assert not reviewer.requests
+
+
+@pytest.mark.parametrize("stage,code", [
+    ("write", "STALE_REVISION_FEEDBACK"),
+    ("write", "STALE_DRAFT_REVISION"),
+    ("review", "STALE_REVIEW_DRAFT"),
+    ("review", "STALE_REVIEW_REPORT"),
+])
+def test_stale_races_map_to_blocked_and_stop(stage, code, tmp_path):
+    p = project(tmp_path)
+    if stage == "review":
+        save_draft(p, "external wins")
+
+    class Raising:
+        calls = 0
+        def run(self, *_args, **_kwargs):
+            self.calls += 1
+            raise WriteWorkflowError(code, "race")
+
+    failing = Raising()
+    unused = Raising()
+    flow = CreationWorkflow(
+        write_workflow_factory=lambda _p: failing if stage == "write" else unused,
+        review_workflow_factory=lambda _p: failing if stage == "review" else unused,
+    )
+
+    result = flow.run(CreationRequest(p, 1))
+
+    assert result.final_state == "BLOCKED"
+    assert result.reason == code
+    assert failing.calls == 1 and unused.calls == 0
+    if stage == "review":
+        assert _body(p, 1) == "external wins"
+
+
+def _body(p, chapter):
+    return parse_frontmatter(draft_path(p, chapter).read_text(encoding="utf-8"))[1]
+
+
+def test_creation_aggregates_every_reviewer_call_usage(tmp_path):
+    p = project(tmp_path)
+    flow, _, reviewer = workflow(p, ["A"], [report()])
+    original = reviewer.run
+    def two_usages(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result.usages = [Usage(1, 1, 2), Usage(2, 2, 4)]
+        return result
+    reviewer.run = two_usages
+
+    result = flow.run(CreationRequest(p))
+
+    assert [usage.total_tokens for usage in result.reviewer_usages] == [2, 4]

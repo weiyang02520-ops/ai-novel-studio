@@ -68,6 +68,7 @@ class ReviewerResult:
     draft_revision: str
     repaired: bool = False
     normalized: bool = False
+    usages: tuple[Usage, ...] = ()
 
 
 class ReviewerRunner:
@@ -91,6 +92,7 @@ class ReviewerRunner:
             self.system_prompt, chapter=req.chapter, instruction=req.instruction,
             rendered_context=rendered_context)
         response = self.provider.chat(messages, tools=None)
+        usages = [response.usage] if response.usage else []
         repaired = False
         try:
             parsed = self._validated(response, req)
@@ -107,6 +109,8 @@ class ReviewerRunner:
                                                              separators=(",", ":"))
                             + "\n失败结果:\n" + (response.text or "")),
             ], tools=None)
+            if repair.usage:
+                usages.append(repair.usage)
             repaired = True
             try:
                 parsed = self._validated(repair, req)
@@ -121,4 +125,5 @@ class ReviewerRunner:
             draft_revision=req.draft_revision,
             repaired=repaired,
             normalized=parsed.normalized,
+            usages=tuple(usages),
         )

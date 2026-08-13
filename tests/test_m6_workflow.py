@@ -17,7 +17,7 @@ from core.review_workflow import (
 )
 from core.storage import ProjectStore, atomic_write_text
 from llm.provider import BaseProvider, CONTEXT_TOO_LONG, ProviderError
-from llm.types import ChatResult
+from llm.types import ChatResult, Usage
 
 
 def report(*, verdict="PASS", issues=None):
@@ -175,6 +175,19 @@ def test_failures_abort_active_review_and_never_ready(project, tmp_path, failure
     # A successful follow-up proves the in-memory active run was aborted.
     followup = FakeProvider([ChatResult(report(), model="reviewer")])
     workflow(followup, settings(tmp_path)).run(ReviewWorkflowRequest(project, 1))
+
+
+def test_reviewer_repair_preserves_usage_from_both_provider_calls(project, tmp_path):
+    provider = FakeProvider([
+        ChatResult("not-json", model="reviewer", usage=Usage(10, 2, 12)),
+        ChatResult(report(), model="reviewer", usage=Usage(5, 3, 8)),
+    ])
+
+    result = workflow(provider, settings(tmp_path)).run(ReviewWorkflowRequest(project, 1))
+
+    assert result.reviewer_result.usage.total_tokens == 8
+    assert [usage.total_tokens for usage in result.reviewer_result.usages] == [12, 8]
+    assert [usage.total_tokens for usage in result.usages] == [12, 8]
 
 
 def test_external_edit_before_response_causes_stale_finalize_without_overwrite(project, tmp_path):

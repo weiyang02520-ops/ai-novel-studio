@@ -23,6 +23,10 @@ from .write_workflow import WriteRequest
 
 
 FINAL_STATES = frozenset({"READY", "ESCALATED", "INTERRUPTED", "BLOCKED"})
+STALE_CODES = frozenset({
+    "STALE_REVISION_FEEDBACK", "STALE_DRAFT_REVISION",
+    "STALE_REVIEW_DRAFT", "STALE_REVIEW_REPORT",
+})
 
 
 class CreationWorkflowError(Exception):
@@ -112,6 +116,14 @@ class CreationWorkflow:
                               verdict, final_state, rounds or [], chief or [], writer or [],
                               reviewer or [], warnings or [], reason)
 
+    def _stale_result(self, exc, chapter, *, rounds, chief, writer, reviewer, warnings):
+        code = getattr(exc, "code", "")
+        if code not in STALE_CODES:
+            raise exc
+        return self._result(chapter, "BLOCKED", "BLOCKED", rounds=rounds,
+                            chief=chief, writer=writer, reviewer=reviewer,
+                            warnings=warnings, reason=code)
+
     def run(self, request: CreationRequest, *, on_stage=None) -> CreationResult:
         project = self._project = request.project
         chapter = request.chapter or project.current_chapter + 1
@@ -154,9 +166,14 @@ class CreationWorkflow:
         previous_fingerprints: tuple[str, ...] = ()
 
         if not target.exists():
-            written = writer_flow.run(WriteRequest(
-                project, chapter, request.instruction, request.title, request.target_chars,
-                request.characters, request.world, "new", stream=request.stream))
+            try:
+                written = writer_flow.run(WriteRequest(
+                    project, chapter, request.instruction, request.title, request.target_chars,
+                    request.characters, request.world, "new", stream=request.stream))
+            except Exception as exc:
+                return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
+                                          writer=writer_usages, reviewer=reviewer_usages,
+                                          warnings=warnings)
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
@@ -193,10 +210,15 @@ class CreationWorkflow:
                 report, review_report_hash=report_hash, draft_revision=draft_revision,
                 round_number=1)
             before_body = _body_hash(project, chapter)
-            written = writer_flow.run(WriteRequest(
-                project, chapter, request.instruction, request.title, request.target_chars,
-                request.characters, request.world, "rewrite", stream=request.stream,
-                revision_feedback=feedback))
+            try:
+                written = writer_flow.run(WriteRequest(
+                    project, chapter, request.instruction, request.title, request.target_chars,
+                    request.characters, request.world, "rewrite", stream=request.stream,
+                    revision_feedback=feedback))
+            except Exception as exc:
+                return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
+                                          writer=writer_usages, reviewer=reviewer_usages,
+                                          warnings=warnings)
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
@@ -213,9 +235,14 @@ class CreationWorkflow:
 
         for review_round in range(1, max_rounds + 1):
             round_started = _now()
-            reviewed = review_flow.run(ReviewWorkflowRequest(
-                project, chapter, request.review_instruction,
-                request.characters, request.world))
+            try:
+                reviewed = review_flow.run(ReviewWorkflowRequest(
+                    project, chapter, request.review_instruction,
+                    request.characters, request.world))
+            except Exception as exc:
+                return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
+                                          writer=writer_usages, reviewer=reviewer_usages,
+                                          warnings=warnings)
             reviewer_usages.extend(reviewed.usages)
             report = reviewed.report
             report_hash = reviewed.review_result.report_hash
@@ -265,10 +292,15 @@ class CreationWorkflow:
                 report, review_report_hash=report_hash, draft_revision=draft_revision,
                 round_number=review_round)
             before_revision, before_body = file_revision(target), _body_hash(project, chapter)
-            written = writer_flow.run(WriteRequest(
-                project, chapter, request.instruction, request.title, request.target_chars,
-                request.characters, request.world, "rewrite", stream=request.stream,
-                revision_feedback=feedback))
+            try:
+                written = writer_flow.run(WriteRequest(
+                    project, chapter, request.instruction, request.title, request.target_chars,
+                    request.characters, request.world, "rewrite", stream=request.stream,
+                    revision_feedback=feedback))
+            except Exception as exc:
+                return self._stale_result(exc, chapter, rounds=rounds, chief=chief_usages,
+                                          writer=writer_usages, reviewer=reviewer_usages,
+                                          warnings=warnings)
             chief_usages.extend(written.chief_usages); writer_usages.extend(written.writer_usages)
             warnings.extend(getattr(written, "warnings", []))
             if written.status == "interrupted":
