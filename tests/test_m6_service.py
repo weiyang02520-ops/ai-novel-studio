@@ -213,3 +213,17 @@ def test_concurrent_begins_are_safe_first_finalize_wins(project):
     svc.finalize(first, FakeReport(verdict="NEEDS_WORK"))
     with pytest.raises(ReviewError, match="STALE_REVIEW_REPORT"):
         svc.finalize(second, FakeReport(verdict="NEEDS_WORK"))
+
+
+def test_artifact_unknown_top_level_field_is_rejected(project):
+    from core.review import ReviewError, load_review_artifact
+    ai_draft(project); svc = service()(project)
+    result = svc.finalize(svc.begin(chapter=1, reviewer_model="r", context_hash="h"), FakeReport())
+    rp = project.dir / result.report_path
+    data = json.loads(rp.read_text(encoding="utf-8"))
+    data["authorization"] = "must never persist"
+    atomic_write_text(rp, json.dumps(data, ensure_ascii=False))
+    with pytest.raises(ReviewError, match="MALFORMED_REVIEW_REPORT"):
+        load_review_artifact(project, 1)
+    with pytest.raises(DataIntegrityError, match="review"):
+        confirm_draft(project, 1)

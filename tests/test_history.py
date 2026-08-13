@@ -28,12 +28,32 @@ def test_update_creates_snapshot(proj):
     assert len(records) == 1
     rec = records[0]
     assert rec["operation"] == "chapter.update"
-    # changes 列表(单文件)
     assert len(rec["changes"]) == 1
     ch = rec["changes"][0]
     assert ch["target"] == "drafts/ch0001.draft.md"
     assert ch["previous"] == "present"
-    assert ch["backup"]  # 快照文件存在
+    assert ch["backup"]
+
+
+def test_immediate_snapshot_commit_failure_releases_history_lock(proj, monkeypatch):
+    import core.history as history
+    write_draft(proj, 1, "t", "v1")
+    real = history.atomic_write_text
+    failed = False
+
+    def fail_index_once(path, text):
+        nonlocal failed
+        if path.name == "index.jsonl" and not failed:
+            failed = True
+            raise StorageError("index fault")
+        return real(path, text)
+
+    monkeypatch.setattr(history, "atomic_write_text", fail_index_once)
+    with pytest.raises(StorageError, match="index fault"):
+        snapshot(proj, "test.failed", "drafts/ch0001.draft.md")
+    # Must not wait for Snapshot GC or hit the 30-second lock timeout.
+    record = snapshot(proj, "test.after", "drafts/ch0001.draft.md")
+    assert record["operation"] == "test.after" and record["seq"] == 1
 
 
 def test_snapshot_contains_previous_content(proj):

@@ -256,7 +256,13 @@ def snapshot(project: Project, operation: str, target_rel: str) -> dict[str, Any
 def snapshot_multi(project: Project, operation: str, target_rels: list[str]) -> dict[str, Any]:
     """立即快照并记录(多文件, 兼容入口)。"""
     s = prepare_snapshot(project, operation, target_rels)
-    return s.commit()
+    try:
+        return s.commit()
+    except Exception:
+        # This compatibility helper snapshots only; no business bytes were
+        # mutated between prepare and commit, so discard is always safe.
+        s.discard()
+        raise
 
 
 def list_history(project: Project) -> list[dict[str, Any]]:

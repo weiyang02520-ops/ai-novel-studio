@@ -103,6 +103,8 @@ def _canonical(data: dict[str, Any]) -> str:
 _REPORT_FIELDS = {"chapter", "verdict", "summary", "issues", "strengths",
                   "task_fulfillment", "continuity_assessment", "style_assessment",
                   "logic_assessment", "confidence", "source"}
+_ARTIFACT_FIELDS = _REPORT_FIELDS | {"draft_revision", "reviewed_at", "reviewer_model",
+                                    "context_hash", "report_hash"}
 
 
 def _report_payload_hash(data: dict[str, Any]) -> str:
@@ -127,6 +129,8 @@ def load_review_artifact(project: Project, chapter: int) -> dict[str, Any]:
         raise ReviewError("MALFORMED_REVIEW_REPORT", "report is not valid UTF-8 JSON") from exc
     if not isinstance(data, dict):
         raise ReviewError("MALFORMED_REVIEW_REPORT", "report root must be object")
+    if set(data) != _ARTIFACT_FIELDS:
+        raise ReviewError("MALFORMED_REVIEW_REPORT", "report artifact fields invalid")
     required = {"chapter", "draft_revision", "reviewer_model", "context_hash",
                 "reviewed_at", "report_hash", "verdict", "issues"}
     if required - set(data):
