@@ -361,6 +361,15 @@ def _confirm_draft_locked(project: Project, number: int) -> Chapter:
     elif origin == "ai":
         if status != "ready":
             raise DataIntegrityError(f"{path.name}: AI 章节必须先经 ready 才能确认")
+        # READY is valid only while a strict PASS artifact matches these exact
+        # canonical draft bytes; an externally toggled status must not confirm.
+        from .mutation import file_revision
+        from .review import ReviewError, require_current_pass_report
+        try:
+            require_current_pass_report(project, number, file_revision(path))
+        except ReviewError as exc:
+            raise DataIntegrityError(
+                f"{path.name}: AI ready draft 缺少当前有效的 PASS review: {exc}") from exc
     else:  # parse_frontmatter normally rejects this; keep boundary explicit.
         raise DataIntegrityError(f"{path.name}: 非法 origin={origin!r}")
 
