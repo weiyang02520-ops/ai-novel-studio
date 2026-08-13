@@ -1,25 +1,30 @@
-# M7 Readiness — Interfaces Only
+# M7 Autonomous Creation Loop — Implemented Boundary
 
-> M7 is **NOT AUTHORIZED**. 本文只记录 M6 已准备好的接口边界，不授权或实现任何 Writer↔Reviewer 自动循环。
+M7 is implemented and awaiting external review. This document records the shipped interface boundary; it does not authorize M8.
 
-## M6 已提供的接口
+## Implemented flow
 
-- `ReviewReport`：严格、可归一化、可哈希的结构化 verdict/issues 合约；`NEEDS_WORK` 问题可作为未来显式改写输入，但 M6 不自动转发给 Writer。
-- `ReviewService`：revision-bound begin/finalize/reopen/inspect；独占 review artifact 与 draft/ready 状态持久化。
-- Reviewer ContextBudget：按 reviewer model window 选择 draft、规则、章纲、相关人物/世界、最近 confirmed 等来源；不注入全书，截断时 fail-closed。
-- READY boundary：只有 current matching PASS report 可支持 AI draft 保持 READY 并被用户显式确认。
-- NEEDS_WORK feedback：结构化 category/severity/location/evidence/suggestion 已落入 `review/chNNNN.review.json`，草稿保持 draft。
+- `compose <project> [chapter]` coordinates Chief planning, Writer generation or bounded rewrite, and Reviewer evaluation.
+- A fixed `for` loop enforces `max_review_rounds` in the range 1–10. There is no unbounded autonomous loop.
+- `RevisionFeedback` is strict, evidence-free, capped, hashed, and rendered to Chief and Writer as untrusted DATA beneath formal project facts.
+- A current `NEEDS_WORK` report may drive one bounded rewrite only after deterministic preflight is checked again.
+- Repeated blocker/major fingerprints, non-rewriteable blockers, insufficient review context, no-effect rewrites, and exhausted rounds escalate instead of continuing blindly.
 
-## 未来 M7 可消费的边界
+## Durable state and recovery
 
-未来经单独授权后，M7 可以在这些接口之上设计 Writer↔Reviewer orchestration，例如把用户选择的 NEEDS_WORK 建议转成新的显式 Writer task，再对新 revision 发起 review。任何此类循环都必须继续遵守 revision、预算、history、正文所有权和显式用户确认边界。
+- `workflow/.runs/chNNNN.compose.json` stores an exact privacy-safe allowlist of hashes, phases, counters, model identifiers, and timestamps.
+- It never stores prose, prompts, context, instructions, report evidence, credentials, or a full round trace.
+- `compose --status` and `compose --reset-run` are offline and do not initialize providers or read secrets.
+- `compose --resume` validates and reconciles the sidecar against canonical draft, report, and M5 partial state. External bytes win every stale race.
+- READY removes the active compose sidecar. ESCALATED retains it for inspection and an explicit resume after the user fixes project data.
 
-## 当前明确不存在
+## Authority boundary
 
-- Reviewer 自动调用 Writer 或 DraftService rewrite
-- 自动 continue、自动多轮 review 或 `max_review_rounds` 编排
-- PASS 后自动 confirm/收编 confirmed
-- 自动更新 post-confirm memory
-- 持久化 reviewing/pending sidecar；M6 方案 B 的 `review recover` 返回 `NO_PENDING_REVIEW`
+- M7 may call existing Chief, Writer, and Reviewer workflows; it does not grant Reviewer write tools or Writer review authority.
+- Compose never confirms a chapter, advances `current_chapter`, edits confirmed chapters, or mutates outline, character, world, rules, or memory sources.
+- Reviewer PASS produces READY only. The user must still run `chapter confirm <project> <chapter>` explicitly.
+- Failures, malformed model output, context uncertainty, interruptions, stale revisions, and races never produce a false READY.
 
-这些能力均属于 M7。**M7 NOT AUTHORIZED.**
+## Next milestone
+
+M8 is **NOT AUTHORIZED** and **NOT STARTED**. Post-confirm memory automation, sessions, GUI, import/export, analytics, and any additional autonomous behavior remain future design topics only. See `M8_READINESS.md`.
