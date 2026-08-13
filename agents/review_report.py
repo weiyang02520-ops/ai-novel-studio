@@ -23,7 +23,12 @@ MAX_REPORT_CHARS = 500_000
 
 
 class ReviewReportError(ValueError):
-    pass
+    """Report contract failure with a stable machine-readable code."""
+
+    def __init__(self, code: str, message: str | None = None):
+        self.code = code
+        self.message = message or code
+        super().__init__(self.message)
 
 
 def _object(data: Any, name: str, allowed: set[str], required: set[str]) -> dict[str, Any]:
@@ -173,6 +178,14 @@ def _title_key(title: str) -> str:
     return " ".join(title.casefold().split())
 
 
+def _issue_rank(issue: ReviewIssue) -> tuple[Any, ...]:
+    """Prefer high severity, then stable content independent of model order."""
+    return (
+        SEVERITIES.index(issue.severity), issue.id, issue.description,
+        issue.evidence, issue.suggestion, issue.title,
+    )
+
+
 def _normalize_issues(issues: list[ReviewIssue], draft_line_count: int | None) -> tuple[tuple[ReviewIssue, ...], bool]:
     changed = False
     unique: dict[tuple[Any, ...], ReviewIssue] = {}
@@ -188,11 +201,7 @@ def _normalize_issues(issues: list[ReviewIssue], draft_line_count: int | None) -
             changed = True
             # Never let a lower-severity duplicate erase a safety-relevant issue.
             # Equal-severity ties use stable content fields rather than input order.
-            rank = lambda value: (
-                SEVERITIES.index(value.severity), value.id, value.description,
-                value.evidence, value.suggestion, value.title,
-            )
-            if rank(issue) < rank(previous):
+            if _issue_rank(issue) < _issue_rank(previous):
                 unique[key] = issue
             continue
         unique[key] = issue

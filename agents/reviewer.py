@@ -91,7 +91,7 @@ class ReviewerRunner:
         except ReviewReportError as exc:
             # A hard-size violation is not repairable safely: echoing the entire
             # failed result into another request would bypass the same bound.
-            if str(exc) == "REVIEW_REPORT_TOO_LARGE":
+            if exc.code == "REVIEW_REPORT_TOO_LARGE":
                 raise ReviewerError("REVIEW_UNVERIFIED", "Reviewer 报告超过安全上限") from exc
             repair = self.provider.chat([
                 ChatMessage("system", "只把输入修正为合法 JSON object，不添加解释。"),

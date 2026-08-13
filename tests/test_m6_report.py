@@ -166,6 +166,13 @@ def test_oversized_response_fails_closed_without_repairing_full_text():
     assert len(provider.calls) == 1
 
 
+def test_report_errors_expose_stable_code_separate_from_message():
+    with pytest.raises(ReviewReportError) as caught:
+        parse_review_report("x" * (MAX_REPORT_CHARS + 1))
+    assert caught.value.code == "REVIEW_REPORT_TOO_LARGE"
+    assert str(caught.value)
+
+
 def test_runner_double_malformed_and_protocol_violation_fail_closed():
     provider = FakeProvider([ChatResult("bad"), ChatResult("still bad")])
     with pytest.raises(ReviewerError, match="REVIEW_UNVERIFIED"):
