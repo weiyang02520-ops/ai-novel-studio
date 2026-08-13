@@ -10,7 +10,7 @@ from typing import Any
 from .chapter import confirmed_path, draft_path, parse_frontmatter
 from .generation import generation_paths
 from .mutation import ABSENT, file_revision
-from .review import ReviewError, load_review_artifact
+from .review import ReviewError, load_review_artifact, require_current_pass_report
 from .storage import StorageError, atomic_write_json, format_chapter_filename
 
 
@@ -264,8 +264,13 @@ def compose_status(project, chapter: int) -> ComposeStatus:
         can_resume = partial.is_file() and partial_sidecar.is_file()
     else:
         can_resume = phase != "READY"
-    can_confirm = (origin == "ai" and draft_status == "ready" and current
-                   and verdict == "PASS" and not confirmed.exists())
+    can_confirm = False
+    if origin == "ai" and draft_status == "ready" and not confirmed.exists():
+        try:
+            require_current_pass_report(project, chapter, revision)
+            can_confirm = True
+        except ReviewError:
+            pass
     return ComposeStatus(
         chapter, chapter_state, revision, current, verdict, rounds, phase,
         partial_exists, can_resume, can_confirm,

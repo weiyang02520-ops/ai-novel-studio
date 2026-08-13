@@ -17,6 +17,7 @@ from core.compose_state import (
 )
 from core.mutation import file_revision
 from core.project import create_project
+from core.review import _report_payload_hash, report_path
 from core.storage import ProjectStore, atomic_write_json, atomic_write_text
 
 
@@ -196,3 +197,42 @@ def test_compose_status_marks_partial_resumable_only_for_interrupted_writer(tmp_
     assert status.partial_exists is True
     assert status.compose_phase == "WRITER_INTERRUPTED"
     assert status.can_resume is True
+
+
+@pytest.mark.parametrize(
+    ("severity", "expected"),
+    [("MAJOR", False), ("BLOCKER", False), ("INFO", True)],
+)
+def test_compose_status_uses_the_real_pass_gate_for_can_confirm(tmp_path, severity, expected):
+    project = _project(tmp_path)
+    path = _ai_draft(project, status="ready")
+    artifact = {
+        "chapter": 1,
+        "verdict": "PASS",
+        "summary": "summary",
+        "issues": [{
+            "id": "issue-1", "category": "DIALOGUE", "severity": severity,
+            "title": "title", "description": "description",
+            "location": {"line_start": None, "line_end": None, "anchor": None},
+            "evidence": "", "suggestion": "suggestion",
+        }],
+        "strengths": [],
+        "task_fulfillment": "ok",
+        "continuity_assessment": "ok",
+        "style_assessment": "ok",
+        "logic_assessment": "ok",
+        "confidence": 1.0,
+        "source": "llm",
+        "draft_revision": file_revision(path),
+        "reviewed_at": "2026-08-13T00:00:00Z",
+        "reviewer_model": "review-model",
+        "context_hash": "e" * 64,
+    }
+    artifact["report_hash"] = _report_payload_hash(artifact)
+    atomic_write_json(report_path(project, 1), artifact)
+
+    status = compose_status(project, 1)
+
+    assert status.review_current is True
+    assert status.latest_verdict == "PASS"
+    assert status.can_confirm is expected
