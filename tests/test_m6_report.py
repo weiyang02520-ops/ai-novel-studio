@@ -6,6 +6,8 @@ import pytest
 
 from agents.definitions import reviewer_agent_def
 from agents.review_report import (
+    CATEGORIES,
+    MAX_REPORT_CHARS,
     ReviewReportError,
     canonical_report_json,
     parse_review_report,
@@ -81,6 +83,15 @@ def test_normalizes_lines_deduplicates_orders_and_downgrades_pass():
     assert parsed.report.issues[1].location.line_end is None
 
 
+def test_duplicate_issue_keeps_highest_severity_before_pass_policy():
+    minor = _payload()["issues"][0] | {
+        "id": "minor", "category": "LOGIC", "severity": "MINOR", "title": "same issue"}
+    blocker = minor | {"id": "blocker", "severity": "BLOCKER", "title": " SAME   ISSUE "}
+    parsed = parse_review_report(json.dumps(_payload(issues=[minor, blocker]), ensure_ascii=False))
+    assert parsed.report.verdict == "NEEDS_WORK"
+    assert [(x.id, x.severity) for x in parsed.report.issues] == [("blocker", "BLOCKER")]
+
+
 def test_issue_limit_is_deterministically_truncated():
     issue = _payload()["issues"][0]
     issues = [issue | {"id": str(i), "title": f"issue {i}"} for i in range(55)]
@@ -136,6 +147,23 @@ def test_runner_repairs_once_with_only_schema_and_failed_result():
     assert "Schema:" in repair_messages[1].content
     assert "bad output" in repair_messages[1].content
     assert "secret context" not in repair_messages[1].content
+
+
+def test_repair_schema_contains_all_fixed_enums():
+    provider = FakeProvider([ChatResult("bad"), ChatResult(json.dumps(_payload()))])
+    ReviewerRunner(provider, "system").run(
+        ReviewRequest(object(), 1, "rev", Plan()), rendered_context="context")
+    schema = provider.calls[1][0][1].content.split("\n失败结果:", 1)[0]
+    assert all(category in schema for category in CATEGORIES)
+    assert all(value in schema for value in ("PASS", "NEEDS_WORK", "BLOCKER", "MAJOR", "MINOR", "INFO"))
+
+
+def test_oversized_response_fails_closed_without_repairing_full_text():
+    provider = FakeProvider([ChatResult("x" * (MAX_REPORT_CHARS + 1))])
+    with pytest.raises(ReviewerError, match="REVIEW_UNVERIFIED"):
+        ReviewerRunner(provider, "system").run(
+            ReviewRequest(object(), 1, "rev", Plan()), rendered_context="context")
+    assert len(provider.calls) == 1
 
 
 def test_runner_double_malformed_and_protocol_violation_fail_closed():

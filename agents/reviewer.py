@@ -6,12 +6,20 @@ import json
 
 from llm.provider import BaseProvider
 from llm.types import ChatMessage, Usage
-from .review_report import ParsedReviewReport, ReviewReport, ReviewReportError, parse_review_report
+from .review_report import (
+    CATEGORIES,
+    SEVERITIES,
+    VERDICTS,
+    ParsedReviewReport,
+    ReviewReport,
+    ReviewReportError,
+    parse_review_report,
+)
 
 REVIEW_REPORT_SCHEMA = {
-    "chapter": "positive integer", "verdict": "PASS | NEEDS_WORK", "summary": "string <= 5000 chars",
+    "chapter": "positive integer", "verdict": sorted(VERDICTS), "summary": "string <= 5000 chars",
     "issues": [{
-        "id": "string", "category": "fixed category enum", "severity": "BLOCKER | MAJOR | MINOR | INFO",
+        "id": "string", "category": sorted(CATEGORIES), "severity": list(SEVERITIES),
         "title": "string", "description": "string",
         "location": {"line_start": "integer|null", "line_end": "integer|null", "anchor": "string|null"},
         "evidence": "string <= 300 chars", "suggestion": "string",
@@ -80,7 +88,11 @@ class ReviewerRunner:
             parsed = self._validated(response, req)
         except ReviewerError:
             raise
-        except ReviewReportError:
+        except ReviewReportError as exc:
+            # A hard-size violation is not repairable safely: echoing the entire
+            # failed result into another request would bypass the same bound.
+            if str(exc) == "REVIEW_REPORT_TOO_LARGE":
+                raise ReviewerError("REVIEW_UNVERIFIED", "Reviewer 报告超过安全上限") from exc
             repair = self.provider.chat([
                 ChatMessage("system", "只把输入修正为合法 JSON object，不添加解释。"),
                 ChatMessage("user", "Schema: " + json.dumps(REVIEW_REPORT_SCHEMA, ensure_ascii=False,

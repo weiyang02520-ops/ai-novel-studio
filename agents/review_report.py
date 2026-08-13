@@ -183,8 +183,17 @@ def _normalize_issues(issues: list[ReviewIssue], draft_line_count: int | None) -
             issue = dataclasses.replace(issue, location=location)
         key = (issue.category, issue.location.line_start, issue.location.line_end,
                issue.location.anchor, _title_key(issue.title))
-        if key in unique:
+        previous = unique.get(key)
+        if previous is not None:
             changed = True
+            # Never let a lower-severity duplicate erase a safety-relevant issue.
+            # Equal-severity ties use stable content fields rather than input order.
+            rank = lambda value: (
+                SEVERITIES.index(value.severity), value.id, value.description,
+                value.evidence, value.suggestion, value.title,
+            )
+            if rank(issue) < rank(previous):
+                unique[key] = issue
             continue
         unique[key] = issue
     ordered = sorted(unique.values(), key=lambda x: (
