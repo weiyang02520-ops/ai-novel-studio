@@ -55,6 +55,9 @@ class _Handler(BaseHTTPRequestHandler):
         with mock.lock:
             pending = mock.responses.pop(0) if mock.responses else None
 
+        if mock.before_response is not None:
+            mock.before_response(req, len(mock.requests))
+
         if pending is not None:
             status, payload = pending
             if isinstance(payload, str) and payload.startswith("data:"):
@@ -121,6 +124,7 @@ class MockServer:
         self.require_auth: Optional[str] = None
         self.forbid_auth: bool = False
         self.auth_violation: bool = False
+        self.before_response = None  # optional test hook(request, request_count)
         self.stream_mode: Optional[str] = None  # None | "full" | "interrupt"
         self.stream_chunks: list[str] = []
         self.lock = threading.Lock()
