@@ -44,7 +44,7 @@ ai-novel-studio/
 - 手动路径: DRAFT → USER_CONFIRMED → CONFIRMED; 确认后草稿移入 chapters/, current_chapter=max 推进
 - confirmed 正文受保护(write/update 不得覆盖)
 - frontmatter 自研解析(不引入 YAML 依赖): chapter/volume/title/status/origin/words/created_at/updated_at/summary/characters
-- origin: manual(M1 只此)/ai(未来); AI 章节必须过 Reviewer
+- origin: manual/ai；AI 章节必须有与当前 draft revision 匹配的 PASS review 才能确认
 
 ## clean-room 边界
 - 不使用 XingLu 任何代码/资源/API/品牌; 只参考 clean-room/(逆向仓库)设计规格
@@ -105,7 +105,7 @@ ai-novel-studio/
 
 ## M5 Writer 稳定规则(稳定)
 - Writer 只输出正文且 AgentDef 工具列表为空；workflow 独占 canonical draft persistence。
-- AI draft 固定 `origin=ai, status=draft`；M6 前不可 confirm，手动与 AI draft 路径保持分离。
+- Writer finalize 固定生成 `origin=ai, status=draft`；手动与 AI draft 路径保持分离。
 - 每次 Writer 调用前必须构建 ContextBudget；默认永不自动注入全书正文。
 - Chief Planner 同样必须按 chief model window 构建 bounded context；TaskCard JSON reserve 独立，首次无结果 `CONTEXT_TOO_LONG` 只缩到约 0.65 后重试一次，JSON repair 另限一次且不重带小说 context。
 - Chief TaskCard 使用严格 JSON schema、一次 repair 与确定性 fallback；TaskCard/hash 不含 secret。
@@ -117,8 +117,19 @@ ai-novel-studio/
 - Writer 首次无正文 `CONTEXT_TOO_LONG` 只缩 budget 重试一次；已有正文后绝不从头重试。
 - `write --no-stream` 必须调用 Provider `chat()`，不是仅关闭 stdout delta；Provider 返回前失败不留下有效 partial。
 - relevance source 由章纲、卷纲、结构化 TaskCard 与 instruction 共用构造，online workflow 与 offline `context plan` 保持一致。
-- confirm 按 origin 分支：manual 允许 draft/user_confirmed；AI 只允许 ready，确认后保留 AI origin。M5 不提供 READY transition。
-- Reviewer 仍属未来 M6：`DRAFT → REVIEWING → READY`，M6 NOT AUTHORIZED。
+- confirm 按 origin 分支：manual 允许 draft/user_confirmed；AI 只允许 ready 且必须有 current matching PASS report，确认后保留 AI origin。
+
+## M6 Reviewer 稳定规则（稳定，9 条）
+
+1. **Reviewer read/analyze only**：Reviewer 无工具、不是 Writer，不能修改正文；正文 body 必须保持 byte-level invariant。
+2. **ReviewService owns persistence**：只有 ReviewService 能写 review artifact 与 review/status transition；所有落盘受 chapter lock、revision CAS、Snapshot/history 与回滚保护。
+3. **PASS is strict and fail-closed**：PASS 必须没有 BLOCKER/MAJOR；JSON/Provider/Context/Preflight 无法证明 PASS 时一律不能 READY。
+4. **Report binds exact revision**：review report 绑定精确 draft raw-byte revision；draft 或 report 被外部修改后旧结果 stale，不得覆盖外部新字节。
+5. **READY requires a current PASS**：AI ready 必须有 schema/hash 均合法且匹配当前 draft 的 PASS artifact；Doctor 与 confirm 都执行此边界。
+6. **Reviewer context is bounded**：按 reviewer model window 预算，草稿最高优先；不注入全书；超大/重试截断显式标记并阻止 READY。
+7. **No automatic confirmation**：PASS 只执行 draft→ready，不推进 current_chapter、不创建 confirmed；用户必须显式 `chapter confirm`。
+8. **Architecture B has no persisted reviewing**：reviewing 只是 Workflow 进程内状态；无 pending sidecar，失败时 canonical draft 不变，`review recover` 固定 `NO_PENDING_REVIEW`。
+9. **M7 owns orchestration**：NEEDS_WORK 保持 draft，用户只能显式 `write --rewrite` 后再次 review；自动 rewrite/continue/多轮 review/confirm/post-confirm memory 属 M7，当前未授权。
 
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)

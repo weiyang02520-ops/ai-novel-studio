@@ -9,11 +9,11 @@
 - 管理多本小说的项目结构(大纲/人物/世界观/章节/记忆)
 - 章节本地持久化(纯 Markdown + JSON, 无数据库, 备份 = 拷贝目录)
 - 直接对话: 支持符合 OpenAI Chat Completions 兼容接口的服务(OpenAI / DeepSeek / OpenRouter / Ollama 本地等)
-- 主编 Agent 可规划章节并安全修改资料；Writer 可生成受保护的 AI 草稿；Reviewer 仍在后续里程碑
+- 主编 Agent 可规划章节并安全修改资料；Writer 生成受保护的 AI 草稿；Reviewer 提供 revision-bound 审稿关卡
 - 所有 AI 调用走你自己的 OpenAI 兼容 API(自定义 Base URL / API Key / Model)
 - 数据 100% 本地保存, 无云同步, 无账号系统
 
-> 当前状态: M5 Writer 实现完成，等待外部审核。Writer 只生成 `origin=ai, status=draft` 的草稿；M6 Reviewer 尚未授权。
+> 当前状态: M6 Reviewer 实现完成，等待外部验收。M7 的 Writer↔Reviewer 自动改写循环未授权、未实现。
 
 ## 安装
 
@@ -156,7 +156,7 @@ python -m adapters.cli audit mutations my-novel
 python -m adapters.cli undo-last-change my-novel
 ```
 
-`knowledge doctor` 只报告重复 H1、history 损坏、章节冲突和 symlink escape 等事实，不会修复或改写项目。
+`knowledge doctor` 只报告重复 H1、history 损坏、章节冲突、symlink escape，以及 READY 草稿缺失/过期/损坏 review report 等事实，不会修复或改写项目。
 
 - 所有 `chat --project` 在支持 tool calls 时都获得完整 M4 schema；CLI 不用关键词猜测能力。普通事实/建议问题仍只读，只有明确执行修改的语义才允许 Chief 选择 mutation。
 - `tool_calls=false` 的弱模型永远只读：上下文显式标记 `MUTATION_CAPABILITY: DISABLED`，不发送或执行 mutation tools。
@@ -203,7 +203,43 @@ python -m adapters.cli undo-last-change my-novel
 
 Chief Planner 与 Writer 都受模型窗口预算约束：Planner 使用较小的 JSON 输出预留，并在首次 `CONTEXT_TOO_LONG` 时把资料缩到约 65% 后只重试一次。partial sidecar 仅保存恢复所需的 redacted TaskCard，不保存用户 instruction、Chief brief 或项目全文。
 
-M5 Writer 生成的 AI draft 不能直接 `chapter confirm`。确认边界已按 origin 准备好：manual 的 draft/user_confirmed 可确认，AI 只有 ready 可确认且确认后保持 `origin=ai`；但 M5 不提供 READY 转换，仍必须等待尚未授权的 M6 Reviewer。手动草稿保持原有确认流程。
+M5 Writer 生成的 AI draft 不能直接 `chapter confirm`。确认边界按 origin 分开：manual 的 draft/user_confirmed 可确认；AI 草稿必须先通过 M6 Reviewer 进入 `ready`，并且 review report 必须仍与当前草稿 revision 精确匹配。
+
+### Reviewer：从 AI 草稿到 READY（M6）
+
+完整的人工作业边界是 `write → review → show → explicit confirm`：
+
+```bash
+# 1) Writer 创建 origin=ai, status=draft
+python -m adapters.cli write my-novel 2 --instruction "沈砚进入鹤梁山"
+
+# 2) Reviewer 审核当前 AI draft；不改正文、不自动调用 Writer
+python -m adapters.cli review my-novel 2
+
+# 3) 阅读结构化报告与问题
+python -m adapters.cli review show my-novel 2
+python -m adapters.cli review issues my-novel 2 --severity MAJOR
+
+# 4a) PASS 只把草稿变成 READY；仍需用户显式确认
+python -m adapters.cli chapter confirm my-novel 2
+
+# 4b) NEEDS_WORK 保持 draft；用户决定是否手动改写并再次 review
+python -m adapters.cli write my-novel 2 --rewrite --instruction "依据审稿意见收紧对白"
+python -m adapters.cli review my-novel 2
+```
+
+`review --plan-only` 只做 Preflight、相关性与 ContextBudget 规划，不调用模型，也不修改状态、报告或 history。`review show/info/issues` 读取已保存的 `review/chNNNN.review.json`。READY 如需重新写作，先显式执行 `review reopen` 回到 draft。
+
+Reviewer 采用方案 B：`reviewing` 只是进程内 Workflow run state，canonical frontmatter 不会持久停留在 `reviewing`，也没有 pending sidecar。进程失败时 canonical draft 保持不变；`review recover` 因此明确返回 `NO_PENDING_REVIEW`。
+
+Reviewer 的质量判断是辅助意见，不是绝对真理：
+
+- PASS 只表示在当前可见、严格有界的 Context 中，没有发现 BLOCKER 或 MAJOR；不表示文学质量客观满分。
+- 重大问题应说明位置、证据、违反的事实/规则和修改建议；FACT_SOURCE 优先于 DERIVED_MEMORY。
+- 它检查任务完成度、人物/世界/时间线/连续性、场景与因果逻辑、信息来源、重复与过度解释、AI 腔、对白、节奏、结尾职责和设定漂移。
+- 它区分“读者暂时不知道”和作者逻辑漏洞，不把尚未解释的伏笔自动判错，也不为显得严格而硬找问题。
+- Context 不足、草稿被截断、JSON 无法验证或任何确定性 BLOCKER 都 fail-closed：不能进入 READY。
+- M6 不会自动 rewrite、continue、重复 review、confirm 或更新 post-confirm memory；这些编排属于尚未授权的 M7。
 
 ## 数据在哪里
 
@@ -233,7 +269,7 @@ data/novels/<project_id>/
 
 ## 当前尚未实现
 
-- Reviewer Agent 与 AI 草稿的 REVIEWING → READY 流程（M6，尚未授权）
+- Writer↔Reviewer 自动改写/多轮审稿/自动确认与 post-confirm memory 编排（M7，未授权）
 - 自动摘要与更高级的长文本多级裁剪
 - 聊天历史持久化 / 多轮会话(当前每轮独立请求; 主编多轮仅内存)
 - 自动发布/手机端/会员 — 不在路线图
