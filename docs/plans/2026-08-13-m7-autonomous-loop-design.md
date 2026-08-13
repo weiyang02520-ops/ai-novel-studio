@@ -1,5 +1,11 @@
 # M7 Autonomous Creation Loop Design
 
+## Implementation status
+
+**Implemented and locally verified. Awaiting External ChatGPT M7 review. M8 is not authorized.**
+
+The production implementation lives in `core/revision_feedback.py`, `core/compose_state.py`, `core/creation_workflow.py` and `adapters/cli/m7.py`, with M5 context integration in the existing Writer path. The implementation retained the selected thin-orchestrator architecture; no fourth creative agent, direct Provider/HTTP dependency, second history, automatic confirmation or knowledge mutation was added.
+
 ## Scope
 
 M7 composes the existing Chief, Writer and Reviewer into a bounded autonomous loop. It may create and rewrite an AI draft, but never confirms a chapter, mutates formal knowledge, overwrites confirmed prose, or advances `current_chapter`. M8 remains unauthorized.
@@ -12,7 +18,7 @@ M7 composes the existing Chief, Writer and Reviewer into a bounded autonomous lo
 
 ## Core contracts
 
-- `RevisionFeedback` contains at most 20 executable non-INFO issues, prioritized BLOCKER/MAJOR/MINOR, plus at most three strengths to preserve. It excludes evidence and is capped at 20,000 characters.
+- `RevisionFeedback` contains at most 20 executable non-INFO issues, prioritized BLOCKER/MAJOR/MINOR, plus at most three strengths to preserve. It excludes evidence and is capped at 20,000 characters. BLOCKER/MAJOR findings are never silently removed to fit the cap; an unrepresentable critical set fails explicitly.
 - `CreationRound` stores only hashes, revisions, verdict/count metadata, models, timestamps and writer mode.
 - `ComposeRunStore` persists `workflow/.runs/chNNNN.compose.json` via safe-path atomic JSON with an exact allowlist. It stores instruction SHA-256, never instruction text, prose, prompt, context, report, evidence, credentials or authorization.
 - `CreationWorkflow` uses a fixed `for review_round in range(1, max_rounds + 1)` loop. `max_review_rounds` means Reviewer calls and is strictly 1–10.
@@ -33,7 +39,7 @@ Each completed canonical draft is reviewed. PASS returns READY. NEEDS_WORK is in
 
 ## Resume and races
 
-Run state is written before/after stable stage boundaries, not as a second undo log. Resume re-derives truth from canonical draft/report/partial files and validates chapter, instruction hash, configured max rounds, draft revision, report hash/verdict and phase consistency. Stale saved metadata never authorizes a rewrite. Existing M5/M6 revision guards ensure external bytes win during Writer or Reviewer calls. Reset deletes only the run sidecar.
+Run state is written before/after stable stage boundaries, not as a second undo log. Resume re-derives truth from canonical draft/report/partial files and validates chapter, instruction hash, configured max rounds, model identifiers, draft revision, report hash/verdict and phase consistency. Interrupted rewrites reconstruct bounded feedback from the current strict NEEDS_WORK artifact before resuming the M5 partial. Stale saved metadata never authorizes a rewrite. Existing M5/M6 revision guards ensure external bytes win during Writer or Reviewer calls. Reset deletes only the run sidecar; READY removes it and ESCALATED retains it for diagnosis.
 
 ## Usage and privacy
 

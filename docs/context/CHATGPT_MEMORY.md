@@ -54,4 +54,8 @@ M5 Writer generates revision-protected AI drafts from bounded project context；
 Chief planning and Writer input are independently bounded; partial resume metadata is prompt-redacted; `--no-stream` uses a true non-stream Provider call. Confirm permits AI only at READY while preserving AI origin。
 
 ## [DESIGN_DECISION] M6 Reviewer
-M6 implementation complete，等待 External ChatGPT M6 review。Reviewer read/analyze only，无工具且不改正文；ReviewService 独占 report/status persistence。PASS 要求无 BLOCKER/MAJOR，任何 Provider/parser/context/preflight/transaction 不确定性 fail-closed。Report 绑定精确 draft revision，READY 必须有 current matching strict PASS artifact；PASS 不自动 confirm。Reviewer context bounded 且不注入全书，截断不能 READY。M7 自动 Writer↔Reviewer loop、自动 confirm 与 post-confirm memory **NOT AUTHORIZED**。
+M6 Reviewer 已成为 M7 可复用的严格关卡：Reviewer read/analyze only，无工具且不改正文；ReviewService 独占 report/status persistence。PASS 要求无 BLOCKER/MAJOR，任何 Provider/parser/context/preflight/transaction 不确定性 fail-closed。Report 绑定精确 draft revision，READY 必须有 current matching strict PASS artifact；PASS 不自动 confirm。Reviewer context bounded 且不注入全书，截断不能 READY。
+
+M7 Autonomous Creation Loop implementation complete，等待 External ChatGPT M7 review。普通入口为 `compose <project> [chapter]`：Chief 规划 → Writer draft → Reviewer；NEEDS_WORK 转成 evidence-free、最多20项/3 strengths/canonical 20k 的 RevisionFeedback DATA，再经 Chief 规划 Writer rewrite 和 re-review。Reviewer 调用次数严格 1–10；max rounds、deterministic preflight blocker、相同 major/blocker fingerprint stall、Writer body no-effect、external stale 或 interruption 都有明确停止状态。
+
+M7 以 `workflow/.runs/chNNNN.compose.json` 保存最小 allowlisted metadata，可跨进程 resume。恢复会验证 instruction SHA256、max rounds、模型配置、draft revision、report hash/currentness 与 M5 partial mode/base；不保存 instruction 原文、正文、Prompt、Context、完整报告/evidence 或 secret。READY 清 active sidecar，ESCALATED 保留，reset-run 只删 sidecar。compose 永不 confirm、不推进 current_chapter、不改 confirmed 或知识事实源；用户仍需显式 `chapter confirm`。M8 **NOT AUTHORIZED / NOT STARTED**。

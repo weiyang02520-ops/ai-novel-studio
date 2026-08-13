@@ -129,7 +129,22 @@ ai-novel-studio/
 6. **Reviewer context is bounded**：按 reviewer model window 预算，草稿最高优先；不注入全书；超大/重试截断显式标记并阻止 READY。
 7. **No automatic confirmation**：PASS 只执行 draft→ready，不推进 current_chapter、不创建 confirmed；用户必须显式 `chapter confirm`。
 8. **Architecture B has no persisted reviewing**：reviewing 只是 Workflow 进程内状态；无 pending sidecar，失败时 canonical draft 不变，`review recover` 固定 `NO_PENDING_REVIEW`。
-9. **M7 owns orchestration**：NEEDS_WORK 保持 draft，用户只能显式 `write --rewrite` 后再次 review；自动 rewrite/continue/多轮 review/confirm/post-confirm memory 属 M7，当前未授权。
+9. **M7 owns orchestration**：低层 review 的 NEEDS_WORK 保持 draft；自动 Chief→Writer→Reviewer 修稿循环只由 M7 CreationWorkflow 编排，Reviewer 本身仍不能调用 Writer 或 confirm。
+
+## M7 Autonomous Creation Loop 稳定规则（稳定）
+
+1. **Workflow, not a fourth agent**：`CreationWorkflow` 只编排现有 `WriteWorkflow` / `ReviewWorkflow`；不直接调用 Provider/HTTP，不另建 Agent Runtime、History、DraftService 或 ReviewService。
+2. **Bounded Reviewer calls**：`max_review_rounds` 是 Reviewer 最大调用次数，严格 1–10；循环使用有限 `for`，最多 `max_rounds - 1` 次自动 rewrite。
+3. **Feedback is bounded DATA**：ReviewReport 转为严格 `RevisionFeedback`；排除 evidence/INFO，最多 20 条、3 个 preserve、canonical 20k chars；BLOCKER/MAJOR 不可为凑上限而静默丢弃。正式章纲/规则优先于 feedback，feedback 优先于 current draft。
+4. **Chief plans every rewrite**：自动修稿仍走 M5 Chief Planner；不是 Reviewer 输出直达 Writer。Writer 无知识写工具，feedback 中的 prompt injection 只能作为 DATA。
+5. **Deterministic stop policy**：任何 ReviewPreflight BLOCKER 立即 fail-closed；连续相同 BLOCKER/MAJOR fingerprint 集合判定 stalled；rewrite 后正文 body SHA256 不变判定 no-effect；轮数耗尽均 ESCALATED。
+6. **Durable minimal sidecar**：`workflow/.runs/chNNNN.compose.json` 只允许 chapter/run/phase/round/revision/report hash/verdict/fingerprints/timestamps/writer mode/models/instruction SHA256；不保存 instruction 原文、正文、Prompt、Context、报告/evidence、人物世界内容、Key 或 Authorization。
+7. **Resume revalidates truth**：恢复前验证 instruction hash、max rounds、模型配置、canonical draft revision、report hash/currentness 与 M5 partial mode/base；rewrite partial 从 current strict NEEDS_WORK artifact 重建同一 bounded feedback，再调用 M5 `resume`。
+8. **External bytes win**：Writer/Reviewer CAS stale race 返回 BLOCKED/ESCALATED，不覆盖用户或外部修改；WAITING_REVIEW/WAITING_REREVIEW 恢复不会重复调用 Writer。
+9. **Cleanup policy**：READY 删除 active compose sidecar；ESCALATED 保留供 status/诊断；reset-run 只删 compose sidecar，不删 draft/report/partial/history。
+10. **No auto confirm or knowledge mutation**：compose 最多到 READY；永不创建/修改 confirmed chapter、推进 `current_chapter`、调用 `confirm_draft` 或修改 outline/characters/world/rules/memory。用户必须显式 `chapter confirm`。
+11. **Usage/privacy**：CreationResult 按 Chief/Writer/Reviewer 聚合 Usage metadata；不输出或持久化创作文本。Reviewer malformed repair 的所有 usage 均计入 reviewer 汇总。
+12. **M8 boundary**：post-confirm memory、持久化会话/compaction、GUI、导入导出、质量分析属于 M8 候选；M8 未授权、未开始。
 
 ## M2 Provider 稳定规则(稳定)
 - **Provider 抽象**: CLI → core/config → llm/factory → BaseProvider → OpenAICompatibleProvider → transport(httpx)。CLI 不知道 HTTP/SSE/JSON 细节; M3 Agent Runtime 只依赖 BaseProvider + llm/types 内部模型(ChatMessage/ChatResult/ChatChunk/Usage/ToolCall)

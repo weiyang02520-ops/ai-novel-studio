@@ -8,6 +8,14 @@
 
 **Tech Stack:** Python 3.11 stdlib, existing workflow/provider/context/history/storage abstractions, pytest and localhost OpenAI-compatible mock server.
 
+## Execution status
+
+- Tasks 1–6: **implemented and locally verified** through focused unit, integration and static/privacy suites.
+- Task 7: **final localhost HTTP/static verification is coordinated by the main delivery task**; its final count belongs in PROJECT_STATE/REVIEW_REQUEST, not this plan.
+- Task 8 documentation: **completed** in README, durable memories and M8 readiness.
+- Task 8 final delivery: **pending main-thread full-suite result, checkpoint, push and External ChatGPT M7 review**.
+- M8: **NOT AUTHORIZED / NOT STARTED**.
+
 ---
 
 ### Task 1: RevisionFeedback and deterministic loop policy

@@ -9,11 +9,11 @@
 - 管理多本小说的项目结构(大纲/人物/世界观/章节/记忆)
 - 章节本地持久化(纯 Markdown + JSON, 无数据库, 备份 = 拷贝目录)
 - 直接对话: 支持符合 OpenAI Chat Completions 兼容接口的服务(OpenAI / DeepSeek / OpenRouter / Ollama 本地等)
-- 主编 Agent 可规划章节并安全修改资料；Writer 生成受保护的 AI 草稿；Reviewer 提供 revision-bound 审稿关卡
+- 主编 Agent 可规划章节并安全修改资料；Writer 生成受保护的 AI 草稿；Reviewer 提供 revision-bound 审稿关卡；`compose` 将三者编排成有界、可恢复的创作循环
 - 所有 AI 调用走你自己的 OpenAI 兼容 API(自定义 Base URL / API Key / Model)
 - 数据 100% 本地保存, 无云同步, 无账号系统
 
-> 当前状态: M6 Reviewer 实现完成，等待外部验收。M7 的 Writer↔Reviewer 自动改写循环未授权、未实现。
+> 当前状态: M7 Autonomous Creation Loop 实现完成，等待外部验收。M8 未授权、未开始。
 
 ## 安装
 
@@ -239,7 +239,47 @@ Reviewer 的质量判断是辅助意见，不是绝对真理：
 - 它检查任务完成度、人物/世界/时间线/连续性、场景与因果逻辑、信息来源、重复与过度解释、AI 腔、对白、节奏、结尾职责和设定漂移。
 - 它区分“读者暂时不知道”和作者逻辑漏洞，不把尚未解释的伏笔自动判错，也不为显得严格而硬找问题。
 - Context 不足、草稿被截断、JSON 无法验证或任何确定性 BLOCKER 都 fail-closed：不能进入 READY。
-- M6 不会自动 rewrite、continue、重复 review、confirm 或更新 post-confirm memory；这些编排属于尚未授权的 M7。
+- 低层 `review` 命令本身不会自动 rewrite、continue、重复 review、confirm 或更新 memory；M7 的 `compose` 只负责有界编排，仍不自动 confirm。
+
+### Compose：Chief → Writer → Reviewer 自动创作循环（M7）
+
+普通创作优先使用 `compose`。省略章节号时目标为 `current_chapter + 1`：
+
+```bash
+# Chief 规划、Writer 写作、Reviewer 审稿；NEEDS_WORK 时自动进行有界修稿
+python -m adapters.cli compose my-novel --instruction "沈砚进入鹤梁山"
+
+# 最多调用 Reviewer 3 次（合法范围 1–10），展示每轮元数据
+python -m adapters.cli compose my-novel 2 --max-rounds 3 --show-rounds
+
+# 查看当前 canonical 状态与是否可恢复/确认；完全离线
+python -m adapters.cli compose my-novel 2 --status
+
+# Writer 中断或进程退出后，从持久化阶段安全恢复
+python -m adapters.cli compose my-novel 2 --resume --instruction "沈砚进入鹤梁山"
+```
+
+`max_review_rounds` 表示一次 compose 最多调用 Reviewer 的次数。例如 3 轮最多是 `Review → Rewrite → Review → Rewrite → Review`，不会无限循环。每次自动修稿仍由 Chief 重新规划；ReviewReport 会先转换成 bounded `RevisionFeedback` DATA，不能覆盖章纲、规则等正式事实源。
+
+PASS 的终点只是 READY，`compose` 永远不会自动确认、创建 confirmed 章节或推进 `current_chapter`。用户检查正文后必须显式执行：
+
+```bash
+python -m adapters.cli chapter confirm my-novel 2
+```
+
+遇到轮数耗尽、重复问题无进展、Writer 没有实质改动、确定性项目/上下文 blocker 或 stale 外部修改时，流程返回 `ESCALATED` 或 `BLOCKED`，并保留用户/外部字节。可先查看报告，再选择手动处理：
+
+```bash
+python -m adapters.cli review show my-novel 2
+python -m adapters.cli write my-novel 2 --rewrite --instruction "依据报告手动调整"
+# ESCALATED run 先显式重置编排 metadata，再从当前 canonical 状态重新 compose
+python -m adapters.cli compose my-novel 2 --reset-run
+python -m adapters.cli compose my-novel 2 --instruction "沈砚进入鹤梁山"
+```
+
+`compose --reset-run` 只删除 `workflow/.runs/` 中该章的编排 sidecar，不删除 draft、review、partial 或 history。sidecar 只保存阶段、revision、hash、模型 ID 等 allowlisted metadata，不保存 instruction 原文、正文、Prompt、Context、完整报告、evidence 或密钥。
+
+高级用户仍可单独使用低层 `write` 与 `review` 命令，手动决定每次改写和审稿；`compose` 只是复用并编排这些既有安全边界。
 
 ## 数据在哪里
 
@@ -254,6 +294,7 @@ data/novels/<project_id>/
 ├── drafts/            # 草稿
 ├── memory/            # 派生记忆(可重建)
 ├── review/            # 审稿记录
+├── workflow/.runs/    # compose 最小编排状态（非 canonical、无正文）
 └── .history/          # 修改快照(undo 用)
 ```
 
@@ -269,7 +310,8 @@ data/novels/<project_id>/
 
 ## 当前尚未实现
 
-- Writer↔Reviewer 自动改写/多轮审稿/自动确认与 post-confirm memory 编排（M7，未授权）
+- post-confirm memory 提取与质量分析（M8，未授权）
+- GUI / 应用层、项目导入导出（M8 候选，未授权）
 - 自动摘要与更高级的长文本多级裁剪
 - 聊天历史持久化 / 多轮会话(当前每轮独立请求; 主编多轮仅内存)
 - 自动发布/手机端/会员 — 不在路线图
