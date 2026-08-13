@@ -37,6 +37,7 @@ class WriteRequest:
     mode: str = "new"
     plan_only: bool = False
     stream: bool = True
+    revision_feedback: object | None = None
 
 
 @dataclasses.dataclass
@@ -87,6 +88,19 @@ def _planner_items(project, chapter: int) -> list[ContextItem]:
                 f"chapters/ch{project.current_chapter:04d}.tail", "PLANNER_RECENT_TAIL", 90,
                 tail, len(tail), BaseProvider.estimate_tokens(tail)))
     return items
+
+
+def _feedback_item(feedback) -> ContextItem | None:
+    if feedback is None:
+        return None
+    render = getattr(feedback, "render_data", None)
+    if not callable(render):
+        raise WriteWorkflowError("INVALID_REVISION_FEEDBACK", "feedback must be bounded RevisionFeedback")
+    text = render()
+    return ContextItem(
+        "review-feedback", "REVIEW_FEEDBACK", 98, text, len(text),
+        BaseProvider.estimate_tokens(text), getattr(feedback, "review_report_hash", None),
+    )
 
 
 def _load_item(project, rel: str, typ: str, priority: int) -> ContextItem:
@@ -148,6 +162,9 @@ class WriteWorkflow:
                     expected,
                 )
             )
+        feedback = _feedback_item(req.revision_feedback)
+        if feedback is not None:
+            items.append(feedback)
         if continuation_text:
             tail = continuation_text[-4000:]
             items.append(ContextItem(
@@ -236,12 +253,16 @@ class WriteWorkflow:
                     "INSUFFICIENT_WRITING_PLAN", "需要章节细纲或 --instruction"
                 )
             stage("Planning")
+            planner_items = _planner_items(project, chapter)
+            feedback = _feedback_item(req.revision_feedback)
+            if feedback is not None:
+                planner_items.append(feedback)
             planned = self.planner.plan(
                 chapter=chapter,
                 target_chars=req.target_chars,
                 title=req.title,
                 instruction=req.instruction,
-                project_items=_planner_items(project, chapter),
+                project_items=planner_items,
             )
             card = planned.card
             provenance_task_hash = card.task_hash
