@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
@@ -92,6 +93,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"{len(payload):X}\r\n".encode() + payload + b"\r\n")
                 self.wfile.flush()
             if mock.stream_mode == "interrupt":
+                # `close()` alone does not reliably wake an HTTP/1.1 chunked
+                # reader on Windows while BaseHTTPRequestHandler still owns a
+                # buffered socket reference.  An explicit full-duplex shutdown
+                # produces the intended premature EOF (without the 0 chunk).
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
                 return
             self.wfile.write(b"0\r\n\r\n")
