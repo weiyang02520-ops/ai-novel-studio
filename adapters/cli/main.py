@@ -291,6 +291,21 @@ def build_parser() -> argparse.ArgumentParser:
     for action in ("show", "discard"):
         item = partial_sub.add_parser(action); item.add_argument("project_id"); item.add_argument("chapter", type=int)
 
+    # ── M6 Reviewer ──
+    # A free-form positional tail preserves both required forms:
+    #   review <project> [chapter]
+    #   review show|info|issues|recover|reopen <project> <chapter>
+    review = sub.add_parser("review", help="审查 revision-protected AI 草稿")
+    review.add_argument("review_args", nargs="*")
+    review.add_argument("--instruction", default="")
+    review.add_argument("--character", action="append", default=[])
+    review.add_argument("--world", action="append", default=[])
+    review.add_argument("--show-context", action="store_true")
+    review.add_argument("--show-json", action="store_true")
+    review.add_argument("--plan-only", action="store_true")
+    review.add_argument("--severity", choices=("BLOCKER", "MAJOR", "MINOR", "INFO"))
+    review.add_argument("--category")
+
     return p
 
 
@@ -420,6 +435,10 @@ def _main(argv: list[str] | None = None) -> int:
             print("用法: ai-novel-studio draft partial {list|show|discard}")
             return 0
         return m5.cmd_draft(args)
+
+    if args.command == "review":
+        import adapters.cli.m6 as m6
+        return m6.cmd_review(args)
 
     print(f"未知命令: {args.command}")
     return 1
