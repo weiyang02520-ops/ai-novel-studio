@@ -11,6 +11,7 @@ from adapters.cli.m5 import _public_task_card, cmd_context
 from agents.task_card import TaskCardError, WritingTaskCard, parse_task_card
 from agents.planner import ChiefPlanningService, build_planner_context_plan
 from agents.writer import WriterError, WriterRequest, WriterRunner
+from agents.review_report import ReviewReport
 from core.ai_draft import AIChapterDraftService, AIDraftError
 from core.chapter import confirm_draft, draft_path, parse_frontmatter, write_draft
 from core.config import ModelConfig
@@ -23,6 +24,7 @@ from core.knowledge import doctor
 from core.mutation import ABSENT, file_revision
 from core.project import create_project
 from core.relevance import build_relevance_source, RelevanceError, resolve_relevant_entities
+from core.review import ReviewService
 from core.storage import DataIntegrityError, ProjectStore, atomic_write_text
 from core.write_workflow import WriteRequest, WriteWorkflow, WriteWorkflowError
 from llm.provider import BaseProvider, CONTEXT_TOO_LONG, ProviderError, STREAM_INTERRUPTED
@@ -376,12 +378,30 @@ def test_ai_ready_confirm_contract_preserves_ai_origin(project):
         chapter=1, title="", body="READY BODY", mode="new", generation_state="complete",
         model="m", context_hash="c", task_hash="t", expected_revision=ABSENT)
     path = draft_path(project, 1)
-    atomic_write_text(path, path.read_text(encoding="utf-8").replace("status: draft", "status: ready"))
+    report = ReviewReport(
+        chapter=1, verdict="PASS", summary="通过", issues=(), strengths=(),
+        task_fulfillment="完成", continuity_assessment="连续",
+        style_assessment="自然", logic_assessment="成立", confidence=0.9,
+        source="reviewer",
+    )
+    review = ReviewService(project)
+    run = review.begin(chapter=1, reviewer_model="reviewer", context_hash="c")
+    review.finalize(run, report)
     confirmed = confirm_draft(project, 1)
     assert confirmed.status == "confirmed" and confirmed.origin == "ai"
     metadata, body = parse_frontmatter((project.dir / "chapters/ch0001.md").read_text(encoding="utf-8"))
     assert metadata["origin"] == "ai" and body == "READY BODY"
     assert project.current_chapter == 1
+
+
+def test_ai_ready_status_without_current_pass_report_still_cannot_confirm(project):
+    AIChapterDraftService(project).finalize(
+        chapter=1, title="", body="READY BODY", mode="new", generation_state="complete",
+        model="m", context_hash="c", task_hash="t", expected_revision=ABSENT)
+    path = draft_path(project, 1)
+    atomic_write_text(path, path.read_text(encoding="utf-8").replace("status: draft", "status: ready"))
+    with pytest.raises(DataIntegrityError, match="有效的 PASS review"):
+        confirm_draft(project, 1)
 
 
 def test_workflow_new_plan_context_stream_finalize(project):
